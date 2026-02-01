@@ -12,11 +12,12 @@ Concurrent Vector Index Implementations for ANN Search.
 
 ## Setup
 
+
 ```bash
 uv sync
 ```
 
-The benchmark script will attempt to download and cache datasets at runtime.
+Alternatively, the benchmark script will attempt to download it if missing.
 
 ## Building
 
