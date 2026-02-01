@@ -2,74 +2,82 @@
 
 Concurrent Vector Index Implementations for ANN Search.
 
+## Requirements
+
+*   **C++ Compiler**: GCC or Clang with C++17 support.
+*   **Build System**: Meson and Ninja.
+*   **Python**: Python 3.12+
+*   **Package Manager**: `uv` (recommended) or `pip`.
+*   **Libraries**: OpenMP (optional, for some baselines), HDF5 (for reading datasets).
+
+## Setup
+
+1.  **Install `uv`** (if not already installed):
+    ```bash
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    ```
+
+2.  **Install Python Dependencies**:
+    ```bash
+    uv sync
+    ```
+
+3.  **Prepare Data**:
+    If you have Git LFS installed, the dataset `data/sift-128-euclidean.hdf5` should be pulled automatically. If not:
+    ```bash
+    git lfs install
+    git lfs pull
+    ```
+    Alternatively, the benchmark script will attempt to download it if missing.
+
 ## Building
 
-```bash
-# Basic build
-meson setup builddir
-meson compile -C builddir
+The project uses Meson for the C++ build and `uv` for the Python environment.
 
-# With HDF5 support for standard benchmark datasets
+```bash
+# Setup build directory
 meson setup builddir -Duse_hdf5=true
+
+# Compile C++ code and Python bindings
 meson compile -C builddir
-
-```
-
-## Python Bindings
-
-Python bindings are built automatically if `pybind11` is found.
-
-```bash
-# Install dependencies
-source .venv/bin/activate
-pip install pybind11
-
-# Build
-meson setup builddir
-meson compile -C builddir
-
-# Use in Python
-export PYTHONPATH=$PYTHONPATH:$(pwd)/builddir
-python3 -c "import nilvec; index = nilvec.FlatVanilla(128)"
 ```
 
 ## Running Benchmarks
 
+We use `main.py` as the unified entry point for running benchmarks and generating plots.
+
 ```bash
-./builddir/NilVec
+# Make sure the build directory is in your PYTHONPATH
+export PYTHONPATH=$PYTHONPATH:$(pwd)/builddir
+
+# Run full benchmarks (Throughput and Recall)
+uv run main.py --dataset data/sift-128-euclidean.hdf5
+
+# Run only throughput benchmarks (faster)
+uv run main.py --dataset data/sift-128-euclidean.hdf5 --skip-recall
+
+# Limit the dataset size for quick testing
+uv run main.py --dataset data/sift-128-euclidean.hdf5 --skip-recall --limit 1000
 ```
 
-## Generating Plots
+### Generated Plots
+Plots are saved to the `plots/` directory:
+*   `throughput_scaling.png`: Throughput vs. Thread Count.
+*   `recall_vs_qps.png`: Recall vs. QPS (if recall benchmark is run).
 
-Generate recall vs throughput plots from benchmark results:
+## Testing
+
+To run the Python binding tests:
 
 ```bash
-# Create virtual environment (first time only)
-python3 -m venv .venv
-source .venv/bin/activate
-pip install matplotlib
-
-# Run benchmarks and generate plots
-./builddir/NilVec 2>&1 | python tools/plot_results.py
-
-# Or save results and plot separately
-./builddir/NilVec > results.txt 2>&1
-python tools/plot_results.py results.txt
-
-# Save plots without displaying
-python tools/plot_results.py --no-show results.txt
+export PYTHONPATH=$PYTHONPATH:$(pwd)/builddir
+uv run test/test_bindings.py
 ```
 
-Plots are saved to `plots/` directory:
-- `hnsw_recall_vs_qps.png/pdf` - HNSW implementations comparison
-- `ivfflat_recall_vs_qps.png/pdf` - IVFFlat implementations comparison  
-- `combined_recall_vs_qps.png/pdf` - Side-by-side comparison
-- `concurrency_comparison.png` - Concurrency strategy comparison
-
-## Formatting
+## Code Formatting
 
 ```bash
-clang-format -i -- **.cpp **.h **.hpp
+clang-format -i **/*.cpp **/*.hpp
 ```
 
 ## Paper
