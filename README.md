@@ -12,17 +12,11 @@ Concurrent Vector Index Implementations for ANN Search.
 
 ## Setup
 
-1.  **Install Python Dependencies**:
-    ```bash
-    uv sync
-    
-    If you have Git LFS installed, the dataset `data/sift-128-euclidean.hdf5` should be pulled automatically. If not:
-    ```bash
-    git lfs install
-    git lfs pull
-    ```
+```bash
+uv sync
+```
 
-    Alternatively, the benchmark script will attempt to download it if missing.
+The benchmark script will attempt to download and cache datasets at runtime.
 
 ## Building
 
