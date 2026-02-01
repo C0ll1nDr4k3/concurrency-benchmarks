@@ -1,0 +1,619 @@
+import sys
+import os
+import time
+import random
+import argparse
+import numpy as np
+import threading
+import matplotlib.pyplot as plt
+import h5py
+import requests
+import faiss
+import usearch.index
+
+# Add build directory to path
+build_dir = os.path.join(os.getcwd(), "builddir")
+sys.path.append(build_dir)
+
+try:
+    import nilvec
+except ImportError:
+    print("Error: Could not import nilvec. Run `meson compile -C builddir` first.")
+    sys.exit(1)
+
+# --- Configuration ---
+DIM = 128
+# These will be overridden by dataset if present
+NUM_VECTORS = 10000
+NUM_QUERIES = 1000
+K = 10
+DPI = 300
+RW_RATIO = 0.1
+
+# Thread counts to test
+THREAD_COUNTS = [2**n for n in range(1, 5)]
+
+# --- Wrappers ---
+
+
+class FaissHNSW:
+    def __init__(self, dim, M=16, ef_construction=200):
+        if faiss is None:
+            raise ImportError("faiss not installed")
+        self.index = faiss.IndexHNSWFlat(dim, M)
+        self.index.hnsw.efConstruction = ef_construction
+        self.M = M
+        self.ef_construction = ef_construction
+
+    def insert(self, vec):
+        # Faiss expects numpy arrays
+        v = np.array([vec], dtype=np.float32)
+        self.index.add(v)
+
+    def search(self, query, k, ef=None):
+        if ef is not None:
+            self.index.hnsw.efSearch = ef
+        v = np.array([query], dtype=np.float32)
+        D, I = self.index.search(v, k)
+        return type(
+            "Result", (object,), {"ids": I[0].tolist(), "distances": D[0].tolist()}
+        )()
+
+    def set_nprobe(self, n):
+        pass  # Not applicable
+
+    def train(self, data):
+        pass  # Not needed
+
+
+class FaissIVF:
+    def __init__(self, dim, nlist=100, nprobe=1):
+        if faiss is None:
+            raise ImportError("faiss not installed")
+        quantizer = faiss.IndexFlatL2(dim)
+        self.index = faiss.IndexIVFFlat(quantizer, dim, nlist, faiss.METRIC_L2)
+        self.index.nprobe = nprobe
+        self.nlist = nlist
+
+    def train(self, data):
+        # Faiss training needs numpy
+        d = np.array(data, dtype=np.float32)
+        self.index.train(d)
+
+    def insert(self, vec):
+        v = np.array([vec], dtype=np.float32)
+        self.index.add(v)
+
+    def search(self, query, k, ef=None):
+        v = np.array([query], dtype=np.float32)
+        D, I = self.index.search(v, k)
+        return type(
+            "Result", (object,), {"ids": I[0].tolist(), "distances": D[0].tolist()}
+        )()
+
+    def set_nprobe(self, n):
+        self.index.nprobe = n
+
+
+class USearchIndex:
+    def __init__(self, dim, M=16, ef_construction=200):
+        if usearch is None:
+            raise ImportError("usearch not installed")
+        self.index = usearch.index.Index(
+            ndim=dim,
+            metric="l2sq",
+            connectivity=M,
+            expansion_add=ef_construction,
+            expansion_search=ef_construction,
+        )
+        self.dim = dim
+
+    def insert(self, vec):
+        # USearch uses integer labels. We'll use the current size as ID.
+        # Note: This is not thread-safe for concurrent inserts without external locking if we want strictly 0..N IDs,
+        # but for throughput test we just want to measure insert speed.
+        # USearch generates IDs if not provided? No, usually expects key.
+        # For simplicity we'll just use random keys or track size roughly.
+        # Actually USearch `add` takes (key, vector).
+        key = self.index.size
+        # We need to ensure unique keys. In threaded context, this is tricky.
+        # For the benchmark, we might just use a random int or atomic increment if we could.
+        # Let's generate a key based on thread id + local counter?
+        # Or just let it overwrite/fail?
+        # For the purpose of "insert throughput", the key generation overhead should be minimal.
+        # Let's use a simple distinct key approach:
+        # But wait, NILVEC insert returns an ID. The benchmark harness doesn't use the ID.
+        # We can just use a large random integer.
+        key = random.getrandbits(63)
+        v = np.array(vec, dtype=np.float32)
+        self.index.add(key, v)
+
+    def train(self, data):
+        pass
+
+    def search(self, query, k, ef=None):
+        if ef is not None:
+            # USearch 2.x: change expansion_search
+            # This might change global state, not thread-safe for diverse queries, but okay for uniform benchmark
+            try:
+                self.index.change_expansion_search(ef)
+            except:
+                pass
+        v = np.array(query, dtype=np.float32)
+        matches = self.index.search(v, k)
+        # matches.keys, matches.distances
+        return type(
+            "Result",
+            (object,),
+            {"ids": matches.keys.tolist(), "distances": matches.distances.tolist()},
+        )()
+
+    def set_nprobe(self, n):
+        pass
+
+
+# --- Helpers ---
+
+
+def download_dataset(url, path):
+    print(f"Downloading {url} to {path}...")
+    response = requests.get(url, stream=True)
+    if response.status_code == 200:
+        with open(path, "wb") as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+        print("Download complete.")
+    else:
+        print(f"Failed to download dataset: {response.status_code}")
+        sys.exit(1)
+
+
+def load_dataset(path, limit=0):
+    if not os.path.exists(path):
+        url = "http://ann-benchmarks.com/sift-128-euclidean.hdf5"
+        download_dataset(url, path)
+
+    print(f"Loading dataset from {path}...")
+    f = h5py.File(path, "r")
+
+    # helper to convert hdf5 dataset to list of vectors (float)
+    def to_list(dset, limit=0):
+        if limit > 0:
+            return [list(map(float, vec)) for vec in dset[:limit]]
+        return [list(map(float, vec)) for vec in dset]
+
+    train = to_list(f["train"], limit)
+    test = to_list(f["test"], limit)
+
+    # Ground truth
+    if "neighbors" in f:
+        # If we slice the dataset, the original GT is likely invalid/mismatched if it refers to IDs > limit
+        # However, for simply running throughput benchmarks, we don't strictly need accurate GT
+        # unless we are running recall.
+        # But if we limit queries too, we need matching GT size.
+        if limit > 0:
+            gt = None  # Recompute
+        else:
+            gt = [list(map(int, vec[:K])) for vec in f["neighbors"]]
+    else:
+        gt = None
+
+    f.close()
+    return train, test, gt
+
+
+def generate_data(n, dim):
+    return [[random.random() for _ in range(dim)] for _ in range(n)]
+
+
+def compute_recall(results, ground_truth, k):
+    """Compute recall@k"""
+    recall_sum = 0.0
+    for res_ids, true_ids in zip(results, ground_truth):
+        truth_set = set(true_ids[:k])
+        # Intersection
+        found = 0
+        for rid in res_ids:
+            if rid in truth_set:
+                found += 1
+        recall_sum += found / min(k, len(true_ids))
+    return recall_sum / len(results)
+
+
+def get_ground_truth(data, queries, k):
+    """Compute brute-force ground truth using FlatVanilla"""
+    print("Computing ground truth...")
+    index = nilvec.FlatVanilla(len(data[0]))
+    for vec in data:
+        index.insert(vec)
+
+    gt = []
+    for q in queries:
+        res = index.search(q, k)
+        gt.append(res.ids)
+    return gt
+
+
+# --- Benchmarks ---
+
+
+def benchmark_recall_vs_qps(
+    index_cls, index_name, data, queries, gt, k, index_args=None, search_params=None
+):
+    """
+    Run Recall vs QPS benchmark.
+    search_params: list of dicts, e.g. [{'ef': 10}, {'ef': 20}]
+    """
+    if index_args is None:
+        index_args = []
+
+    print(f"\nBenchmarking Recall vs QPS: {index_name}")
+
+    # helper to instantiate properly
+    if "IVF" in index_name:
+        # IVFFlatVanilla takes (dim, nlist, nprobe)
+        # We assume index_cls handles the constructor
+        index = index_cls(DIM, *index_args)
+        print("  Training...")
+        index.train(data)
+    else:
+        index = index_cls(DIM, *index_args)
+
+    print("  Inserting...")
+    start = time.time()
+    for vec in data:
+        index.insert(vec)
+    print(f"  Insert time: {time.time() - start:.2f}s")
+
+    results = []
+
+    for params in search_params:
+        # Apply search parameters
+        if "nprobe" in params:
+            index.set_nprobe(params["nprobe"])
+
+        # Search
+        start = time.time()
+        res_ids_list = []
+        for q in queries:
+            # HNSW search takes 3 args: query, k, ef
+            # IVFFlat search takes 2 args: query, k (nprobe set via setter)
+            if "ef" in params:
+                res = index.search(q, k, params["ef"])
+            else:
+                res = index.search(q, k)
+            res_ids_list.append(res.ids)
+
+        duration = time.time() - start
+        qps = len(queries) / duration
+        recall = compute_recall(res_ids_list, gt, k)
+
+        print(f"  Params: {params} -> Recall: {recall:.4f}, QPS: {qps:.0f}")
+        results.append((recall, qps))
+
+    return results
+
+
+def benchmark_throughput_vs_threads(
+    index_cls, index_name, data, queries, k, index_args=None, rw_ratio=0.5
+):
+    """
+    Run Throughput vs Threads benchmark with configurable R/W split.
+    rw_ratio: Fraction of threads performing inserts (0.0 = Read Only, 1.0 = Write Only)
+    """
+    if index_args is None:
+        index_args = []
+
+    print(f"\nBenchmarking Throughput (W/R={rw_ratio}): {index_name}")
+    results = []
+    conflict_rates = []
+
+    for num_threads in THREAD_COUNTS:
+        # Re-create index for each run to be clean
+        if "IVF" in index_name:
+            index = index_cls(DIM, *index_args)
+            index.train(data)
+        else:
+            index = index_cls(DIM, *index_args)
+
+        # Pre-load some data
+        initial_size = len(data) // 2
+        for i in range(initial_size):
+            index.insert(data[i])
+
+        remaining_data = data[initial_size:]
+
+        ops_count = 0
+        start_time = time.time()
+
+        threads = []
+
+        # Define tasks
+        def search_worker(qs):
+            nonlocal ops_count
+            local_ops = 0
+            # Run for fixed iterations
+            for _ in range(5):
+                for q in qs:
+                    index.search(q, k)
+                    local_ops += 1
+            return local_ops
+
+        def insert_worker(vecs):
+            nonlocal ops_count
+            local_ops = 0
+            for v in vecs:
+                index.insert(v)
+                local_ops += 1
+            return local_ops
+
+        # Calculate thread split
+        num_insert_threads = int(num_threads * rw_ratio)
+        if rw_ratio > 0.0 and rw_ratio < 1.0:
+            if num_insert_threads == 0 and num_threads > 0:
+                num_insert_threads = 1
+            elif num_insert_threads == num_threads and num_threads > 1:
+                num_insert_threads -= 1
+        elif rw_ratio == 0.0:
+            num_insert_threads = 0
+        elif rw_ratio == 1.0:
+            num_insert_threads = num_threads
+
+        num_search_threads = num_threads - num_insert_threads
+
+        # Launch Insert Threads
+        if num_insert_threads > 0:
+            chunk_s = len(remaining_data) // num_insert_threads
+            for i in range(num_insert_threads):
+                start = i * chunk_s
+                end = (
+                    (i + 1) * chunk_s
+                    if i < num_insert_threads - 1
+                    else len(remaining_data)
+                )
+                t = threading.Thread(
+                    target=insert_worker, args=(remaining_data[start:end],)
+                )
+                threads.append(t)
+                t.start()
+
+        # Launch Search Threads
+        if num_search_threads > 0:
+            for i in range(num_search_threads):
+                t = threading.Thread(target=search_worker, args=(queries,))
+                threads.append(t)
+                t.start()
+
+        for t in threads:
+            t.join()
+
+        duration = time.time() - start_time
+
+        # Estimate ops
+        total_inserts = 0
+        if num_insert_threads > 0:
+            total_inserts = len(remaining_data)  # Approximate given we chunked it
+
+        total_searches = 0
+        if num_search_threads > 0:
+            total_searches = num_search_threads * len(queries) * 5
+
+        total_ops = total_inserts + total_searches
+        throughput = total_ops / duration
+        print(
+            f"  Threads: {num_threads} (W={num_insert_threads}, R={num_search_threads}) -> Throughput: {throughput:.0f} ops/s"
+        )
+        results.append(throughput)
+
+        # Check conflict stats
+        if hasattr(index, "conflict_stats"):
+            stats = index.conflict_stats()
+            rate = max(stats.insert_conflict_rate(), stats.search_conflict_rate())
+            conflict_rates.append(rate)
+        else:
+            conflict_rates.append(0)
+
+    return results, conflict_rates
+
+
+# --- Main ---
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--skip-recall", action="store_true")
+    parser.add_argument("--skip-throughput", action="store_true")
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default="sift-128-euclidean.hdf5",
+        help="Path to HDF5 dataset",
+    )
+    parser.add_argument(
+        "--rw-ratio",
+        type=float,
+        default=RW_RATIO,
+        help="Read/Write ratio (0.0=Read, 1.0=Write)",
+    )
+    parser.add_argument(
+        "--limit", type=int, default=0, help="Limit number of vectors (0 = no limit)"
+    )
+    parser.add_argument(
+        "--only-external", action="store_true", help="Run only external benchmarks"
+    )
+    args = parser.parse_args()
+
+    # Load Data
+    if (
+        args.dataset
+        and os.path.exists(args.dataset)
+        or args.dataset == "sift-128-euclidean.hdf5"
+    ):
+        data, queries, gt = load_dataset(args.dataset, args.limit)
+
+        if args.limit > 0:
+            print(f"Limiting dataset to first {args.limit} vectors...")
+            # Data already sliced in load_dataset
+
+            # Recompute GT for subset if needed, but for simplicity we'll just recompute based on subset
+            gt = None
+
+        global DIM, NUM_VECTORS, NUM_QUERIES
+        DIM = len(data[0])
+        NUM_VECTORS = len(data)
+        NUM_QUERIES = len(queries)
+        if gt is None:
+            gt = get_ground_truth(data, queries, K)
+    else:
+        print(f"Generating {NUM_VECTORS} vectors (dim={DIM})...")
+        data = generate_data(NUM_VECTORS, DIM)
+        queries = generate_data(NUM_QUERIES, DIM)
+        gt = get_ground_truth(data, queries, K)
+
+    print(f"Dataset: N={NUM_VECTORS}, Q={NUM_QUERIES}, Dim={DIM}")
+
+    # Indexes to test
+    # HNSW: M=16, ef_cons=200
+    hnsw_args = [16, 200]
+    # IVFFlat: nlist=sqrt(N), nprobe variable
+    nlist = int(NUM_VECTORS**0.5)
+    ivf_args = [nlist, 1]
+
+    # --- Recall vs QPS ---
+    if not args.skip_recall:
+        print("\n=== Recall vs QPS Benchmark ===")
+        plt.figure(figsize=(10, 6))
+
+        # HNSW Variants
+        ef_values = [2**n for n in range(1, 4)]
+        hnsw_params = [{"ef": ef} for ef in ef_values]
+
+        res = benchmark_recall_vs_qps(
+            nilvec.HNSWVanilla,
+            "HNSW Vanilla",
+            data,
+            queries,
+            gt,
+            K,
+            hnsw_args,
+            hnsw_params,
+        )
+        recalls, qps = zip(*res)
+        plt.plot(recalls, qps, "o-", label="HNSW Vanilla")
+
+        # IVFFlat Variants
+        nprobe_values = [1, 2, 4, 8, 16, 32]
+        ivf_params = [{"nprobe": np} for np in nprobe_values if np < nlist]
+
+        res = benchmark_recall_vs_qps(
+            nilvec.IVFFlatVanilla,
+            "IVFFlat Vanilla",
+            data,
+            queries,
+            gt,
+            K,
+            ivf_args,
+            ivf_params,
+        )
+        recalls, qps = zip(*res)
+        plt.plot(recalls, qps, "s-", label="IVFFlat Vanilla")
+
+        plt.xlabel("Recall")
+        plt.ylabel("QPS (log scale)")
+        plt.yscale("log")
+        plt.title(f"Recall vs QPS (K={K}, Dim={DIM})")
+        plt.legend()
+        plt.grid(True)
+        plt.savefig("plots/recall_vs_qps.png", dpi=DPI)
+        print("Saved plots/recall_vs_qps.png")
+
+    # --- throughput vs Threads ---
+    if not args.skip_throughput:
+        print("\n=== Throughput vs Threads Benchmark ===")
+
+        # Define indexes to compare
+        indexes = [
+            # (nilvec.HNSWVanilla, "HNSW Vanilla", hnsw_args),
+            (nilvec.HNSWCoarseOptimistic, "HNSW Coarse Opt", hnsw_args),
+            (nilvec.HNSWCoarsePessimistic, "HNSW Coarse Pess", hnsw_args),
+            (nilvec.HNSWFineOptimistic, "HNSW Fine Opt", hnsw_args),
+            (nilvec.HNSWFinePessimistic, "HNSW Fine Pess", hnsw_args),
+            # IVFFlat
+            (nilvec.IVFFlatCoarseOptimistic, "IVF Coarse Opt", ivf_args),
+            (nilvec.IVFFlatFineOptimistic, "IVF Fine Opt", ivf_args),
+        ]
+
+        # Run benchmarks and collect data
+        throughput_results = {}
+        conflict_results = {}
+
+        # Internal Indexes
+        for cls, name, iargs in indexes:
+            if args.only_external:
+                continue
+            try:
+                res, conflicts = benchmark_throughput_vs_threads(
+                    cls, name, data, queries, K, iargs, rw_ratio=args.rw_ratio
+                )
+                throughput_results[name] = res
+                conflict_results[name] = conflicts
+            except Exception as e:
+                print(f"Skipping {name}: {e}")
+
+        # External Indexes
+        externals = []
+        if faiss:
+            externals.append((FaissHNSW, "FAISS HNSW", hnsw_args))
+            externals.append((FaissIVF, "FAISS IVF", ivf_args))
+        if usearch:
+            externals.append((USearchIndex, "USearch", hnsw_args))
+
+        for cls, name, iargs in externals:
+            try:
+                res, conflicts = benchmark_throughput_vs_threads(
+                    cls, name, data, queries, K, iargs, rw_ratio=args.rw_ratio
+                )
+                throughput_results[name] = res
+                # External libs don't report conflict rates usually, but we capture 0s
+                conflict_results[name] = conflicts
+            except Exception as e:
+                print(f"Skipping {name}: {e}")
+
+        # Plot 1: Throughput
+        plt.figure(figsize=(8, 6))
+        for name, res in throughput_results.items():
+            style = "*--" if "FAISS" in name or "USearch" in name else "o-"
+            plt.plot(THREAD_COUNTS, res, style, label=name)
+
+        plt.xlabel("Threads")
+        plt.ylabel("Ops/sec")
+        plt.title(f"Throughput (W:{args.rw_ratio:.1f}, R:{1.0 - args.rw_ratio:.1f})")
+        plt.legend()
+        plt.grid(True)
+        plt.tight_layout()
+        plt.savefig("plots/throughput_scaling.png", dpi=DPI)
+        print("Saved plots/throughput_scaling.png")
+
+        # Plot 2: Conflict Rates (Optimistic only)
+        plt.figure(figsize=(8, 6))
+        has_conflicts = False
+        for name, conflicts in conflict_results.items():
+            if "Opt" in name:
+                plt.plot(THREAD_COUNTS, conflicts, "x--", label=name)
+                has_conflicts = True
+
+        if has_conflicts:
+            plt.xlabel("Threads")
+            plt.ylabel("Conflict Rate (%)")
+            plt.title("Conflict Rate (Optimistic)")
+            plt.legend()
+            plt.grid(True)
+            plt.tight_layout()
+            plt.savefig("plots/conflict_rate.png", dpi=DPI)
+            print("Saved plots/conflict_rate.png")
+
+
+if __name__ == "__main__":
+    if not os.path.exists("plots"):
+        os.makedirs("plots")
+    main()

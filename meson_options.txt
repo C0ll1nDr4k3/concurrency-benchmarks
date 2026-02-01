@@ -1,0 +1,2 @@
+option('track_conflicts', type: 'boolean', value: true, description: 'Enable conflict tracking for optimistic implementations')
+option('use_hdf5', type: 'boolean', value: true, description: 'Enable HDF5 support for loading standard ANN benchmark datasets')

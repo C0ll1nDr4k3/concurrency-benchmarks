@@ -1,0 +1,78 @@
+# Custom
+
+data/
+*.hdf5
+
+.cache
+
+# Meson
+
+.mypy_cache/
+.pytest_cache/
+/.project
+/.pydevproject
+/.settings
+/.cproject
+/.idea
+/.vscode
+
+__pycache__
+/.coverage/
+/.coveragerc
+/install dir
+/work area
+
+/meson-test-run.txt
+/meson-test-run.xml
+/meson-cross-test-run.txt
+/meson-cross-test-run.xml
+
+.DS_Store
+*~
+*.swp
+packagecache
+.wraplock
+/MANIFEST
+/build
+/dist
+/meson.egg-info
+
+/docs/built_docs
+/docs/hotdoc-private*
+
+*.pyc
+/*venv*
+
+# Clang
+
+# Build artifacts
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+*.out
+*.bin
+build/
+bin/
+lib/
+
+# Temporary files and editor-specific files
+*~
+*.swp
+*.swo
+.DS_Store
+.vscode/
+.idea/
+
+# Clang-specific files
+*.dSYM/
+*.gcno
+*.gcda
+*.gcov
+compile_commands.json
+.clangd/
+#.clang-format
