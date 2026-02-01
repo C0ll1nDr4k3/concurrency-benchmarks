@@ -8,7 +8,10 @@ import threading
 import matplotlib.pyplot as plt
 import h5py
 import requests
-import faiss
+try:
+    import faiss
+except ImportError:
+    faiss = None
 import usearch.index
 
 # Add build directory to path

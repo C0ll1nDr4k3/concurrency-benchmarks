@@ -9,9 +9,12 @@ dependencies = [
     "matplotlib",
     "numpy",
     "requests",
-    "faiss-cpu",  # Assuming CPU version for easier installation, or optional
     "usearch"
 ]
+
+[project.optional-dependencies]
+cpu = ["faiss-cpu"]
+gpu = ["faiss-gpu"]
 
 [build-system]
 requires = ["meson-python", "ninja", "pybind11"]

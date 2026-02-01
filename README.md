@@ -15,20 +15,25 @@ Concurrent Vector Index Implementations for ANN Search.
 You can install `nilvec` directly from GitHub using pip. This is useful if you want to use the library in your own projects without cloning the repository for development.
 
 ```bash
+# Basic install
 pip install git+https://github.com/C0ll1nDr4k3/concurrency-benchmarks.git
-```
 
-To include HDF5 support (requires HDF5 installed on your system):
-```bash
-# HDF5 support is enabled by default in pyproject.toml
-pip install git+https://github.com/C0ll1nDr4k3/concurrency-benchmarks.git
+# With FAISS CPU support
+pip install "git+https://github.com/C0ll1nDr4k3/concurrency-benchmarks.git#egg=nilvec[cpu]"
+
+# With FAISS GPU support
+pip install "git+https://github.com/C0ll1nDr4k3/concurrency-benchmarks.git#egg=nilvec[gpu]"
 ```
 
 ## Setup (For Development)
 
 1.  **Install Python Dependencies**:
     ```bash
-    uv sync
+    # For CPU (default for MacOS)
+    uv sync --extra cpu
+
+    # For GPU
+    uv sync --extra gpu
     ```
 
 2.  **Prepare Data**:
