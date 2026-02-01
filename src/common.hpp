@@ -58,7 +58,7 @@ inline float squared_distance(std::span<const T> a, std::span<const T> b) {
     }
     dist += vaddvq_f32(sum_vec);
 
-#elif defined(__x86_64__) || defined(_M_X64)   // AVX2 (x86_64)
+#elif defined(__x86_64__) || defined(_M_X64)  // AVX2 (x86_64)
     // Check for AVX support (compile-time check mainly, assuming -march=native)
 #ifdef __AVX2__
     __m256 sum_vec = _mm256_setzero_ps();

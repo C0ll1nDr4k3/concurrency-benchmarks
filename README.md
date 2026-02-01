@@ -12,22 +12,16 @@ Concurrent Vector Index Implementations for ANN Search.
 
 ## Setup
 
-1.  **Install `uv`** (if not already installed):
-    ```bash
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    ```
-
-2.  **Install Python Dependencies**:
+1.  **Install Python Dependencies**:
     ```bash
     uv sync
-    ```
-
-3.  **Prepare Data**:
+    
     If you have Git LFS installed, the dataset `data/sift-128-euclidean.hdf5` should be pulled automatically. If not:
     ```bash
     git lfs install
     git lfs pull
     ```
+
     Alternatively, the benchmark script will attempt to download it if missing.
 
 ## Building

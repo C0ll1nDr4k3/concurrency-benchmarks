@@ -222,10 +222,11 @@ class IVFFlatFineOptimistic {
       size_t bucket_size = bucket_copy.size();
       for (size_t i = 0; i < bucket_size; ++i) {
         if (i + 4 < bucket_size) {
-           // We can't safely prefetch the vector data here because we don't hold the vectors_mutex_
-           // and the vector pointers might be reallocated if vectors_ resize. 
-           // However, if vectors_ is stable or we assume resize is rare/handled, we might try.
-           // BUT: IVFFlatFineOptimistic takes a copy of the vector under lock.
+          // We can't safely prefetch the vector data here because we don't hold
+          // the vectors_mutex_ and the vector pointers might be reallocated if
+          // vectors_ resize. However, if vectors_ is stable or we assume resize
+          // is rare/handled, we might try. BUT: IVFFlatFineOptimistic takes a
+          // copy of the vector under lock.
         }
 
         NodeId vec_id = bucket_copy[i];
@@ -234,10 +235,11 @@ class IVFFlatFineOptimistic {
           std::unique_lock lock(vectors_mutex_);
           if (vec_id >= vectors_.size())
             continue;
-          
+
           // Prefetching here is tricky because we copy the vector.
-          // Better optimization: Avoid the copy if possible, but that breaks the design.
-          // Given the constraints, we will just optimize the distance calc.
+          // Better optimization: Avoid the copy if possible, but that breaks
+          // the design. Given the constraints, we will just optimize the
+          // distance calc.
           vec_copy = vectors_[vec_id];
         }
 
