@@ -1,7 +1,6 @@
 # Custom
 
-data/
-*.hdf5
+
 
 .cache
 
