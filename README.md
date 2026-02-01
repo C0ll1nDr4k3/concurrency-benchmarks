@@ -10,7 +10,21 @@ Concurrent Vector Index Implementations for ANN Search.
 *   **Package Manager**: `uv` (recommended) or `pip`.
 *   **Libraries**: OpenMP (optional, for some baselines), HDF5 (for reading datasets).
 
-## Setup
+## Installation
+
+You can install `nilvec` directly from GitHub using pip. This is useful if you want to use the library in your own projects without cloning the repository for development.
+
+```bash
+pip install git+https://github.com/C0ll1nDr4k3/concurrency-benchmarks.git
+```
+
+To include HDF5 support (requires HDF5 installed on your system):
+```bash
+# HDF5 support is enabled by default in pyproject.toml
+pip install git+https://github.com/C0ll1nDr4k3/concurrency-benchmarks.git
+```
+
+## Setup (For Development)
 
 1.  **Install Python Dependencies**:
     ```bash

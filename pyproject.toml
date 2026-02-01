@@ -1,14 +1,21 @@
 [project]
 name = "nilvec"
 version = "0.1.0"
-description = "Add your description here"
+description = "Concurrent Vector Index Implementations for ANN Search"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "h5py>=3.15.1",
-    "matplotlib>=3.10.8",
-    "meson>=1.10.1",
-    "ninja>=1.13.0",
-    "numpy>=2.4.1",
-    "requests>=2.32.5",
+    "h5py",
+    "matplotlib",
+    "numpy",
+    "requests",
+    "faiss-cpu",  # Assuming CPU version for easier installation, or optional
+    "usearch"
 ]
+
+[build-system]
+requires = ["meson-python", "ninja", "pybind11"]
+build-backend = "mesonpython"
+
+[tool.meson-python.args]
+setup = ["-Duse_hdf5=true"]
