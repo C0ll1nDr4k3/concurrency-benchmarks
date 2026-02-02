@@ -52,9 +52,7 @@ meson compile -C builddir
 
 > [!WARNING]
 > Windows Troubleshooting
-
 > If you encounter `LNK1104: cannot open file 'kernel32.lib'`, you need to run the build commands from a "x64 Native Tools Command Prompt for VS 2022" or manually activate the environment:
-
 > ```cmd
 > call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
 > uv sync
