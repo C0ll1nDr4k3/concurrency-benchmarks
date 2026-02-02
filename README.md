@@ -1,6 +1,4 @@
-# NilVec
-
-Concurrent Vector Index Implementations for ANN Search.
+# Concurrent Vector Index Implementations for ANN Search.
 
 ## Requirements
 
@@ -29,7 +27,7 @@ pip install "git+https://github.com/C0ll1nDr4k3/concurrency-benchmarks.git#egg=n
 
 1.  **Install Python Dependencies**:
     ```bash
-    # For CPU (default for MacOS)
+    # For CPU
     uv sync --extra cpu
 
     # For GPU
@@ -82,16 +80,13 @@ To run the Python binding tests:
 ```bash
 export PYTHONPATH=$PYTHONPATH:$(pwd)/builddir
 uv run test/test_bindings.py
-```
 
 ## Code Formatting
 
 ```bash
-clang-format -i **/*.cpp **/*.hpp
+clang-format -i **/*.cpp **/*.hpp && uv format
 ```
 
 ## Paper
-
-```bash
 typst watch paper/nilvec.typ --open
 ```

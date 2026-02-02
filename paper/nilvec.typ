@@ -82,6 +82,10 @@ This gap motivates our systematic exploration of the concurrency control design 
 
 = Results
 
+= Discussion
+
+- *_Why hasn't this been done before?_* That's an excellent question. Techniques as trivial for database concurrency control as these should have been implemented long ago. Well, one possiblity is that for most applications these techniques are unnecessary; most ML workflows simply don't require this level of concurrency control. Another possiblity is that these indexes have had _relatively_ short times spent in the research limelight.
+
 = Conclusion
 
 #bibliography("citations.bib")
