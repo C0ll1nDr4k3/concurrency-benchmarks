@@ -9,15 +9,34 @@ import matplotlib.pyplot as plt
 import h5py
 import requests
 
+import colorama
+from colorama import Fore, Style
+
+colorama.init(autoreset=True)
+
 try:
     import faiss
 except ImportError:
+    print(f"{Fore.YELLOW}faiss not installed{Style.RESET_ALL}")
     faiss = None
 
 try:
     import usearch.index
 except ImportError:
+    print(f"{Fore.YELLOW}usearch not installed{Style.RESET_ALL}")
     usearch = None
+
+try:
+    import pymilvus
+except ImportError:
+    print(f"{Fore.YELLOW}Milvus not installed{Style.RESET_ALL}")
+    pymilvus = None
+
+try:
+    import weaviate
+except ImportError:
+    print(f"{Fore.YELLOW}Weaviate not installed{Style.RESET_ALL}")
+    weaviate = None
 
 # Add build directory to path
 build_dir = os.path.join(os.getcwd(), "builddir")
@@ -117,21 +136,6 @@ class USearchIndex:
         self.dim = dim
 
     def insert(self, vec):
-        # USearch uses integer labels. We'll use the current size as ID.
-        # Note: This is not thread-safe for concurrent inserts without external locking if we want strictly 0..N IDs,
-        # but for throughput test we just want to measure insert speed.
-        # USearch generates IDs if not provided? No, usually expects key.
-        # For simplicity we'll just use random keys or track size roughly.
-        # Actually USearch `add` takes (key, vector).
-        key = self.index.size
-        # We need to ensure unique keys. In threaded context, this is tricky.
-        # For the benchmark, we might just use a random int or atomic increment if we could.
-        # Let's generate a key based on thread id + local counter?
-        # Or just let it overwrite/fail?
-        # For the purpose of "insert throughput", the key generation overhead should be minimal.
-        # Let's use a simple distinct key approach:
-        # But wait, NILVEC insert returns an ID. The benchmark harness doesn't use the ID.
-        # We can just use a large random integer.
         key = random.getrandbits(63)
         v = np.array(vec, dtype=np.float32)
         self.index.add(key, v)
@@ -141,20 +145,116 @@ class USearchIndex:
 
     def search(self, query, k, ef=None):
         if ef is not None:
-            # USearch 2.x: change expansion_search
-            # This might change global state, not thread-safe for diverse queries, but okay for uniform benchmark
             try:
                 self.index.change_expansion_search(ef)
             except:
                 pass
         v = np.array(query, dtype=np.float32)
         matches = self.index.search(v, k)
-        # matches.keys, matches.distances
         return type(
             "Result",
             (object,),
             {"ids": matches.keys.tolist(), "distances": matches.distances.tolist()},
         )()
+
+    def set_nprobe(self, n):
+        pass
+
+
+class MilvusIndex:
+    def __init__(self, dim, M=16, ef_construction=200):
+        try:
+            from pymilvus import MilvusClient
+        except ImportError:
+            raise ImportError("pymilvus not installed")
+
+        self.client = MilvusClient("./milvus_demo.db")
+        self.collection_name = "nilvec_bench"
+        self.dim = dim
+        if self.client.has_collection(self.collection_name):
+            self.client.drop_collection(self.collection_name)
+
+        self.client.create_collection(
+            collection_name=self.collection_name, dimension=dim, auto_id=True
+        )
+        # Note: Milvus Lite parameters are often implicit or set via index creation
+        # verifying index creation parameters might be needed for fair comparison
+
+    def insert(self, vec):
+        data = [{"vector": vec}]
+        self.client.insert(collection_name=self.collection_name, data=data)
+
+    def search(self, query, k, ef=None):
+        search_params = {}
+        if ef:
+            search_params = {"params": {"ef": ef}}
+
+        res = self.client.search(
+            collection_name=self.collection_name,
+            data=[query],
+            limit=k,
+            search_params=search_params,
+            output_fields=["id"],
+        )
+        # res is list of list of matches
+        ids = [hit["id"] for hit in res[0]]
+        distances = [hit["distance"] for hit in res[0]]
+        return type("Result", (object,), {"ids": ids, "distances": distances})()
+
+    def train(self, data):
+        pass
+
+    def set_nprobe(self, n):
+        pass
+
+
+class WeaviateIndex:
+    def __init__(self, dim, M=16, ef_construction=200):
+        try:
+            import weaviate
+            import weaviate.classes.config as wvc
+        except ImportError:
+            raise ImportError("weaviate-client not installed")
+
+        # Connect to embedded Weaviate
+        self.client = weaviate.connect_to_embedded()
+        self.collection_name = "NilVecBench"
+
+        if self.client.collections.exists(self.collection_name):
+            self.client.collections.delete(self.collection_name)
+
+        # Create collection
+        self.client.collections.create(
+            name=self.collection_name,
+            vectorizer_config=wvc.Configure.Vectorizer.none(),
+            vector_index_config=wvc.Configure.VectorIndex.hnsw(
+                ef_construction=ef_construction,
+                max_connections=M,
+            ),
+            properties=[wvc.Property(name="dummy", data_type=wvc.DataType.INT)],
+        )
+        self.collection = self.client.collections.get(self.collection_name)
+
+    def insert(self, vec):
+        # Weaviate expects vectors as list of floats
+        self.collection.data.insert(properties={"dummy": 1}, vector=vec)
+
+    def search(self, query, k, ef=None):
+        # Dynamic ef setting not directly exposed in simple query, uses index config
+        # Weaviate usually requires re-configuring index to change ef at search time (efSearch)
+        # For simple bench we might skip per-query ef setting or assume fixed defaults
+        res = self.collection.query.near_vector(
+            near_vector=query,
+            limit=k,
+            return_metadata=weaviate.classes.query.MetadataQuery(distance=True),
+        )
+
+        ids = [obj.uuid for obj in res.objects]
+        distances = [obj.metadata.distance for obj in res.objects]
+        return type("Result", (object,), {"ids": ids, "distances": distances})()
+
+    def train(self, data):
+        pass
 
     def set_nprobe(self, n):
         pass
@@ -220,7 +320,7 @@ def download_dataset(url, path):
 def load_dataset(path, limit=0):
     # Verify/Create data directory if we need to look there or download there
     data_dir = "data"
-    
+
     # If the path provided doesn't exist, check if it's in data/
     if not os.path.exists(path):
         candidate_path = os.path.join(data_dir, os.path.basename(path))
@@ -238,7 +338,7 @@ def load_dataset(path, limit=0):
         if dataset_name in DATASETS:
             if not os.path.exists(os.path.dirname(path)):
                 os.makedirs(os.path.dirname(path), exist_ok=True)
-                
+
             url = DATASETS[dataset_name]["url"]
             download_dataset(url, path)
         else:
@@ -252,12 +352,12 @@ def load_dataset(path, limit=0):
                 )
                 # Try simple default if requested path was literally the default string
                 if "sift" in path:
-                     url = DATASETS["sift-128-euclidean"]["url"]
-                     if not os.path.exists(os.path.dirname(path)):
+                    url = DATASETS["sift-128-euclidean"]["url"]
+                    if not os.path.exists(os.path.dirname(path)):
                         os.makedirs(os.path.dirname(path), exist_ok=True)
-                     download_dataset(url, path)
+                    download_dataset(url, path)
                 else:
-                     sys.exit(1)
+                    sys.exit(1)
 
     print(f"Loading dataset from {path}...")
     f = h5py.File(path, "r")
@@ -532,10 +632,7 @@ def main():
     # Load Data
     # Check if we likely have a valid dataset to load
     dataset_name = os.path.splitext(os.path.basename(args.dataset))[0]
-    if (
-        args.dataset
-        and (os.path.exists(args.dataset) or dataset_name in DATASETS)
-    ):
+    if args.dataset and (os.path.exists(args.dataset) or dataset_name in DATASETS):
         data, queries, gt = load_dataset(args.dataset, args.limit)
 
         if args.limit > 0:
@@ -654,6 +751,10 @@ def main():
             externals.append((FaissIVF, "FAISS IVF", ivf_args))
         if usearch:
             externals.append((USearchIndex, "USearch", hnsw_args))
+        if pymilvus:
+            externals.append((MilvusIndex, "Milvus", hnsw_args))
+        if weaviate:
+            externals.append((WeaviateIndex, "Weaviate", hnsw_args))
 
         for cls, name, iargs in externals:
             try:
