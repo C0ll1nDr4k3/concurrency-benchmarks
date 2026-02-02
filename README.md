@@ -51,12 +51,18 @@ meson compile -C builddir
 ```
 
 > [!WARNING]
-> Windows Troubleshooting
-> If you encounter `LNK1104: cannot open file 'kernel32.lib'`, you need to run the build commands from a "x64 Native Tools Command Prompt for VS 2022" or manually activate the environment:
+> On Windows, If you encounter `LNK1104: cannot open file 'kernel32.lib'`, first try running the build commands from a "x64 Native Tools Command Prompt for VS 2022" or manually activate the environment:
 > ```cmd
 > call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
 > uv sync
 > ```
+>
+> If the error persists, it usually means the Windows SDK is missing or corrupted. To fix this:
+> 1. Open **Visual Studio Installer**.
+> 2. Click **Modify** on your VS 2022 installation.
+> 3. Under **Workloads**, ensure **Desktop development with C++** is checked.
+> 4. In the **Installation details** sidebar on the right, ensure a **Windows 10 SDK** or **Windows 11 SDK** version (e.g., `10.0.xxxxx.x`) is checked.
+> 5. Click **Modify** to install the missing components.
 
 
 ## Running Benchmarks
