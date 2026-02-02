@@ -30,7 +30,7 @@ pip install "git+https://github.com/C0ll1nDr4k3/concurrency-benchmarks.git#egg=n
     # For CPU
     uv sync --extra cpu
 
-    # For GPU
+    # For GPU (Linux only)
     uv sync --extra gpu
     ```
 
@@ -49,6 +49,17 @@ meson setup builddir -Duse_hdf5=true
 # Compile C++ code and Python bindings
 meson compile -C builddir
 ```
+
+> [!WARNING]
+> Windows Troubleshooting
+
+> If you encounter `LNK1104: cannot open file 'kernel32.lib'`, you need to run the build commands from a "x64 Native Tools Command Prompt for VS 2022" or manually activate the environment:
+
+> ```cmd
+> call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
+> uv sync
+> ```
+
 
 ## Running Benchmarks
 
