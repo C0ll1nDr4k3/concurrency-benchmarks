@@ -60,7 +60,7 @@ py_mod = import('python')
 py = py_mod.find_installation(required: false)
 
 if py.found()
-  pybind11_dep = dependency('pybind11', required: false)
+  pybind11_dep = dependency('pybind11', required: true)
   
   if pybind11_dep.found()
     py.extension_module(

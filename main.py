@@ -163,6 +163,47 @@ class USearchIndex:
 # --- Helpers ---
 
 
+# --- Datasets ---
+
+DATASETS = {
+    "sift-128-euclidean": {
+        "url": "http://ann-benchmarks.com/sift-128-euclidean.hdf5",
+        "dim": 128,
+        "metric": "euclidean",
+    },
+    "fashion-mnist-784-euclidean": {
+        "url": "http://ann-benchmarks.com/fashion-mnist-784-euclidean.hdf5",
+        "dim": 784,
+        "metric": "euclidean",
+    },
+    "glove-100-angular": {
+        "url": "http://ann-benchmarks.com/glove-100-angular.hdf5",
+        "dim": 100,
+        "metric": "angular",
+    },
+    "glove-25-angular": {
+        "url": "http://ann-benchmarks.com/glove-25-angular.hdf5",
+        "dim": 25,
+        "metric": "angular",
+    },
+    "gist-960-euclidean": {
+        "url": "http://ann-benchmarks.com/gist-960-euclidean.hdf5",
+        "dim": 960,
+        "metric": "euclidean",
+    },
+    "nytimes-256-angular": {
+        "url": "http://ann-benchmarks.com/nytimes-256-angular.hdf5",
+        "dim": 256,
+        "metric": "angular",
+    },
+    "mnist-784-euclidean": {
+        "url": "http://ann-benchmarks.com/mnist-784-euclidean.hdf5",
+        "dim": 784,
+        "metric": "euclidean",
+    },
+}
+
+
 def download_dataset(url, path):
     print(f"Downloading {url} to {path}...")
     response = requests.get(url, stream=True)
@@ -177,9 +218,46 @@ def download_dataset(url, path):
 
 
 def load_dataset(path, limit=0):
+    # Verify/Create data directory if we need to look there or download there
+    data_dir = "data"
+    
+    # If the path provided doesn't exist, check if it's in data/
     if not os.path.exists(path):
-        url = "http://ann-benchmarks.com/sift-128-euclidean.hdf5"
-        download_dataset(url, path)
+        candidate_path = os.path.join(data_dir, os.path.basename(path))
+        if os.path.exists(candidate_path):
+            path = candidate_path
+        elif os.sep not in path:
+            # If provided path has no separator, assume we should use data_dir for download
+            path = candidate_path
+
+    # Infer dataset name from path if possible, or assume it matches one of our keys
+    filename = os.path.basename(path)
+    dataset_name = os.path.splitext(filename)[0]
+
+    if not os.path.exists(path):
+        if dataset_name in DATASETS:
+            if not os.path.exists(os.path.dirname(path)):
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                
+            url = DATASETS[dataset_name]["url"]
+            download_dataset(url, path)
+        else:
+            # Fallback or error?
+            # Existing behavior was hardcoded SIFT
+            # Let's see if it looks like a standard name
+            print(f"Dataset {path} not found.")
+            if dataset_name not in DATASETS:
+                print(
+                    f"Unknown dataset name '{dataset_name}'. Available: {list(DATASETS.keys())}"
+                )
+                # Try simple default if requested path was literally the default string
+                if "sift" in path:
+                     url = DATASETS["sift-128-euclidean"]["url"]
+                     if not os.path.exists(os.path.dirname(path)):
+                        os.makedirs(os.path.dirname(path), exist_ok=True)
+                     download_dataset(url, path)
+                else:
+                     sys.exit(1)
 
     print(f"Loading dataset from {path}...")
     f = h5py.File(path, "r")
@@ -452,10 +530,11 @@ def main():
     args = parser.parse_args()
 
     # Load Data
+    # Check if we likely have a valid dataset to load
+    dataset_name = os.path.splitext(os.path.basename(args.dataset))[0]
     if (
         args.dataset
-        and os.path.exists(args.dataset)
-        or args.dataset == "sift-128-euclidean.hdf5"
+        and (os.path.exists(args.dataset) or dataset_name in DATASETS)
     ):
         data, queries, gt = load_dataset(args.dataset, args.limit)
 

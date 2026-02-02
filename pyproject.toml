@@ -9,16 +9,23 @@ dependencies = [
     "matplotlib",
     "numpy",
     "requests",
-    "usearch"
+    "usearch",
 ]
 
-[project.optional-dependencies]
-cpu = ["faiss-cpu"]
-gpu = ["faiss-gpu"]
-
 [build-system]
-requires = ["meson-python", "ninja", "pybind11"]
-build-backend = "mesonpython"
+requires = ["meson-python", "ninja", "pybind11>=2.6"]
+build-backend = "mesonpy"
 
 [tool.meson-python.args]
 setup = ["-Duse_hdf5=true"]
+
+[tool.uv]
+reinstall-package = ["nilvec"]
+
+[dependency-groups]
+dev = [
+    "pybind11>=3.0.1",
+]
+
+[tool.uv.sources]
+nilvec = { path = ".", editable = true }
