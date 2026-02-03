@@ -84,7 +84,7 @@ uv run main.py --dataset data/sift-128-euclidean.hdf5 --skip-recall --limit 1000
 ```
 
 ### Generated Plots
-Plots are saved to the `plots/` directory:
+Plots are saved to the `paper/plots/` directory:
 *   `throughput_scaling.png`: Throughput vs. Thread Count.
 *   `recall_vs_qps.png`: Recall vs. QPS (if recall benchmark is run).
 

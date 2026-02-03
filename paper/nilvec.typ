@@ -80,7 +80,34 @@ This gap motivates our systematic exploration of the concurrency control design 
 
 = Methodology
 
+We evaluate the performance of our concurrency control strategies using a standard ANN benchmark dataset. Specifically, we use the Fashion-MNIST dataset ($d=784$), measuring performance under a mixed workload of search and insertion operations.
+
+== Dataset and Workload
+
+The primary workload consists of a concurrent mix of document insertions (10%) and approximate nearest neighbor searches (90%). This ratio models a read-heavy application with a continuous stream of updates, typical of many real-time vector search scenarios. We vary the number of concurrent worker threads from 1 to 16 to observe the scaling behavior of each index implementation.
+
+We use the Fashion-MNIST dataset, utilizing the Euclidean distance metric. The dataset contains 60,000 training vectors and 10,000 query vectors, with a dimensionality of 784.
+
+== Baselines
+
+To contextualize the performance of our fine-grained locking implementations, we compare against several state-of-the-art open-source vector search libraries:
+
+- *FAISS*: A library for efficient similarity search and clustering of dense vectors. We evaluate both its HNSW and IVF implementations. Note that while FAISS supports parallel construction, its standard search index is not designed for concurrent read/write operations without external locking.
+- *USearch*: A smaller, header-only vector search library generally known for good performance and simplicity.
+- *Weaviate*: An open-source vector database that manages concurrent access, offering a system-level comparison point.
+
+== Experimental Environment
+
+All experiments were conducted on a machine architecture with Apple Silicon (ARM64). The benchmarking harness is implemented in Python, interacting with the core C++ index implementations via bindings to ensure minimal overhead.
+
 = Results
+
+#figure(
+  image("plots/throughput_scaling.svg", width: 80%),
+  caption: [
+    Throughput scaling with increasing numbers of threads for each index type.
+  ],
+)
 
 = Discussion
 

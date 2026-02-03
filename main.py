@@ -8,6 +8,9 @@ import threading
 import matplotlib.pyplot as plt
 import h5py
 import requests
+import matplotlib.image as mpimg
+from matplotlib.offsetbox import OffsetImage, AnnotationBbox
+import pickle
 
 import colorama
 from colorama import Fore, Style
@@ -54,7 +57,7 @@ DIM = 128
 NUM_VECTORS = 10000
 NUM_QUERIES = 1000
 K = 10
-DPI = 300
+DPI = 1200
 RW_RATIO = 0.1
 
 # Thread counts to test
@@ -207,6 +210,9 @@ class MilvusIndex:
     def set_nprobe(self, n):
         pass
 
+    def close(self):
+        self.client.close()
+
 
 class WeaviateIndex:
     def __init__(self, dim, M=16, ef_construction=200):
@@ -258,6 +264,9 @@ class WeaviateIndex:
 
     def set_nprobe(self, n):
         pass
+
+    def close(self):
+        self.client.close()
 
 
 # --- Helpers ---
@@ -493,8 +502,13 @@ def benchmark_throughput_vs_threads(
     print(f"\nBenchmarking Throughput (W/R={rw_ratio}): {index_name}")
     results = []
     conflict_rates = []
+    
+    stop_event = threading.Event()
 
     for num_threads in THREAD_COUNTS:
+        if stop_event.is_set():
+             break
+
         # Re-create index for each run to be clean
         if "IVF" in index_name:
             index = index_cls(DIM, *index_args)
@@ -520,7 +534,9 @@ def benchmark_throughput_vs_threads(
             local_ops = 0
             # Run for fixed iterations
             for _ in range(5):
+                if stop_event.is_set(): break
                 for q in qs:
+                    if stop_event.is_set(): break
                     index.search(q, k)
                     local_ops += 1
             return local_ops
@@ -529,6 +545,7 @@ def benchmark_throughput_vs_threads(
             nonlocal ops_count
             local_ops = 0
             for v in vecs:
+                if stop_event.is_set(): break
                 index.insert(v)
                 local_ops += 1
             return local_ops
@@ -570,8 +587,20 @@ def benchmark_throughput_vs_threads(
                 threads.append(t)
                 t.start()
 
-        for t in threads:
-            t.join()
+        try:
+            for t in threads:
+                while t.is_alive():
+                    t.join(timeout=0.5)
+        except KeyboardInterrupt:
+             print(f"\nSkipping {index_name}: Operation has been terminated")
+             stop_event.set()
+             # Cleanup threads
+             for t in threads:
+                 t.join(timeout=0.1)
+             
+             if hasattr(index, "close"):
+                 index.close()
+             return None, None
 
         duration = time.time() - start_time
 
@@ -598,6 +627,9 @@ def benchmark_throughput_vs_threads(
             conflict_rates.append(rate)
         else:
             conflict_rates.append(0)
+
+        if hasattr(index, "close"):
+            index.close()
 
     return results, conflict_rates
 
@@ -627,7 +659,12 @@ def main():
     parser.add_argument(
         "--only-external", action="store_true", help="Run only external benchmarks"
     )
+    parser.add_argument(
+        "--save-results", type=str, default="benchmark_results.pkl", help="File to save results to"
+    )
     args = parser.parse_args()
+
+
 
     # Load Data
     # Check if we likely have a valid dataset to load
@@ -653,8 +690,19 @@ def main():
         data = generate_data(NUM_VECTORS, DIM)
         queries = generate_data(NUM_QUERIES, DIM)
         gt = get_ground_truth(data, queries, K)
-
+    
     print(f"Dataset: N={NUM_VECTORS}, Q={NUM_QUERIES}, Dim={DIM}")
+
+
+
+    results_cache = {
+        "recall_vs_qps": {"runs": [], "K": K, "DIM": DIM},
+        "throughput": {},
+        "conflicts": {},
+        "thread_counts": THREAD_COUNTS,
+        "rw_ratio": args.rw_ratio,
+        "external_names": []
+    }
 
     # Indexes to test
     # HNSW: M=16, ef_cons=200
@@ -683,6 +731,7 @@ def main():
             hnsw_params,
         )
         recalls, qps = zip(*res)
+        results_cache["recall_vs_qps"]["runs"].append(("HNSW Vanilla", recalls, qps, "o-"))
         plt.plot(recalls, qps, "o-", label="HNSW Vanilla")
 
         # IVFFlat Variants
@@ -700,6 +749,7 @@ def main():
             ivf_params,
         )
         recalls, qps = zip(*res)
+        results_cache["recall_vs_qps"]["runs"].append(("IVFFlat Vanilla", recalls, qps, "s-"))
         plt.plot(recalls, qps, "s-", label="IVFFlat Vanilla")
 
         plt.xlabel("Recall")
@@ -708,8 +758,8 @@ def main():
         plt.title(f"Recall vs QPS (K={K}, Dim={DIM})")
         plt.legend()
         plt.grid(True)
-        plt.savefig("plots/recall_vs_qps.png", dpi=DPI)
-        print("Saved plots/recall_vs_qps.png")
+        plt.savefig("paper/plots/recall_vs_qps.svg", dpi=DPI)
+        print("Saved paper/plots/recall_vs_qps.svg")
 
     # --- throughput vs Threads ---
     if not args.skip_throughput:
@@ -739,6 +789,8 @@ def main():
                 res, conflicts = benchmark_throughput_vs_threads(
                     cls, name, data, queries, K, iargs, rw_ratio=args.rw_ratio
                 )
+                if res is None:
+                    continue
                 throughput_results[name] = res
                 conflict_results[name] = conflicts
             except Exception as e:
@@ -751,8 +803,8 @@ def main():
             externals.append((FaissIVF, "FAISS IVF", ivf_args))
         if usearch:
             externals.append((USearchIndex, "USearch", hnsw_args))
-        if pymilvus:
-            externals.append((MilvusIndex, "Milvus", hnsw_args))
+        # if pymilvus:
+        #     externals.append((MilvusIndex, "Milvus", hnsw_args))
         if weaviate:
             externals.append((WeaviateIndex, "Weaviate", hnsw_args))
 
@@ -761,17 +813,58 @@ def main():
                 res, conflicts = benchmark_throughput_vs_threads(
                     cls, name, data, queries, K, iargs, rw_ratio=args.rw_ratio
                 )
+                if res is None:
+                    continue
                 throughput_results[name] = res
                 # External libs don't report conflict rates usually, but we capture 0s
                 conflict_results[name] = conflicts
             except Exception as e:
                 print(f"Skipping {name}: {e}")
 
+        # Cache results
+        results_cache["throughput"] = throughput_results
+        results_cache["conflicts"] = conflict_results
+        results_cache["external_names"] = [e[1] for e in externals]
+
         # Plot 1: Throughput
         plt.figure(figsize=(8, 6))
+        ax = plt.gca()
+
+        # Icon mapping: "Substring": ("path", zoom)
+        ICON_MAPPING = {
+            "FAISS": ("paper/imgs/meta.png", 0.005),
+            "USearch": ("paper/imgs/usearch.png", 0.005),
+            "Weaviate": ("paper/imgs/weaviate.png", 0.005),
+        }
+
+        loaded_icons = {}
+        for key, (path, zoom) in ICON_MAPPING.items():
+            if os.path.exists(path):
+                try:
+                    loaded_icons[key] = (mpimg.imread(path), zoom)
+                except Exception as e:
+                    print(f"Could not load icon {path}: {e}")
+
         for name, res in throughput_results.items():
-            style = "*--" if "FAISS" in name or "USearch" in name else "o-"
-            plt.plot(THREAD_COUNTS, res, style, label=name)
+            external_names = [e[1] for e in externals]
+
+            # Check for icon match
+            icon_data = None
+            for key, (img, zoom) in loaded_icons.items():
+                if key in name:
+                    icon_data = (img, zoom)
+                    break
+
+            if icon_data:
+                img, zoom = icon_data
+                plt.plot(THREAD_COUNTS, res, "--", label=name, alpha=0.75)
+                for x, y in zip(THREAD_COUNTS, res):
+                    im = OffsetImage(img, zoom=zoom)
+                    ab = AnnotationBbox(im, (x, y), xycoords='data', frameon=False)
+                    ax.add_artist(ab)
+            else:
+                style = "*--" if name in external_names else "o-"
+                plt.plot(THREAD_COUNTS, res, style, label=name, alpha=0.75)
 
         plt.xlabel("Threads")
         plt.ylabel("Ops/sec")
@@ -779,8 +872,8 @@ def main():
         plt.legend()
         plt.grid(True)
         plt.tight_layout()
-        plt.savefig("plots/throughput_scaling.png", dpi=DPI)
-        print("Saved plots/throughput_scaling.png")
+        plt.savefig("paper/plots/throughput_scaling.svg", dpi=DPI)
+        print("Saved plots/throughput_scaling.svg")
 
         # Plot 2: Conflict Rates (Optimistic only)
         plt.figure(figsize=(8, 6))
@@ -797,11 +890,16 @@ def main():
             plt.legend()
             plt.grid(True)
             plt.tight_layout()
-            plt.savefig("plots/conflict_rate.png", dpi=DPI)
-            print("Saved plots/conflict_rate.png")
+            plt.savefig("paper/plots/conflict_rate.svg", dpi=DPI)
+            print("Saved paper/plots/conflict_rate.svg")
+
+    if args.save_results:
+        print(f"Saving results to {args.save_results}...")
+        with open(args.save_results, "wb") as f:
+            pickle.dump(results_cache, f)
 
 
 if __name__ == "__main__":
-    if not os.path.exists("plots"):
-        os.makedirs("plots")
+    if not os.path.exists("paper/plots"):
+        os.makedirs("paper/plots")
     main()
