@@ -3,6 +3,7 @@ data/
 *.db
 *.db-journal
 *.db.lock
+*.pkl
 
 
 .cache

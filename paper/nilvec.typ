@@ -102,6 +102,10 @@ All experiments were conducted on a machine architecture with Apple Silicon (ARM
 
 = Results
 
+== Throughput
+
+Incidentaly, the lower a dataset's throughput, the higher is cluster density.
+
 #figure(
   image("plots/throughput_scaling.svg", width: 80%),
   caption: [

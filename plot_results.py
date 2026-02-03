@@ -4,6 +4,13 @@ import matplotlib.image as mpimg
 from matplotlib.offsetbox import OffsetImage, AnnotationBbox
 import argparse
 import os
+try:
+    from nilvec.benchmark import ICON_MAPPING, COLOR_MAPPING
+except ImportError:
+    # Fallback if nilvec not installed in env running this script
+    ICON_MAPPING = {}
+    COLOR_MAPPING = {}
+    print("Warning: nilvec not found, icons and colors might be missing")
 
 def plot_results(results_path, output_dir="paper/plots", dpi=1200):
     if not os.path.exists(results_path):
@@ -50,13 +57,6 @@ def plot_results(results_path, output_dir="paper/plots", dpi=1200):
         rw_ratio = data.get("rw_ratio", 0.1)
         external_names = data.get("external_names", [])
 
-        # Icon mapping: "Substring": ("path", zoom)
-        ICON_MAPPING = {
-            "FAISS": ("paper/imgs/meta.png", 0.005),
-            "USearch": ("paper/imgs/usearch.png", 0.005),
-            "Weaviate": ("paper/imgs/weaviate.png", 0.005),
-        }
-
         loaded_icons = {}
         for key, (path, zoom) in ICON_MAPPING.items():
             if os.path.exists(path):
@@ -72,17 +72,24 @@ def plot_results(results_path, output_dir="paper/plots", dpi=1200):
                 if key in name:
                     icon_data = (img, zoom)
                     break
+            
+            # Check for color match
+            color = None
+            for key, c in COLOR_MAPPING.items():
+                if key in name:
+                    color = c
+                    break
 
             if icon_data:
                 img, zoom = icon_data
-                plt.plot(thread_counts, res, "--", label=name, alpha=0.75)
+                plt.plot(thread_counts, res, "--", label=name, alpha=0.75, color=color)
                 for x, y in zip(thread_counts, res):
                     im = OffsetImage(img, zoom=zoom)
                     ab = AnnotationBbox(im, (x, y), xycoords='data', frameon=False)
                     ax.add_artist(ab)
             else:
                 style = "*--" if name in external_names else "o-"
-                plt.plot(thread_counts, res, style, label=name, alpha=0.75)
+                plt.plot(thread_counts, res, style, label=name, alpha=0.75, color=color)
 
         plt.xlabel("Threads")
         plt.ylabel("Ops/sec")

@@ -57,18 +57,24 @@ test('basic', exe)
 
 # Python bindings
 py_mod = import('python')
-py = py_mod.find_installation(required: false)
+py = py_mod.find_installation(required: false, pure: false)
 
 if py.found()
   pybind11_dep = dependency('pybind11', required: true)
   
   if pybind11_dep.found()
     py.extension_module(
-      'nilvec',
+      '_nilvec',
       'src/python_bindings.cpp',
       dependencies: dependencies + [pybind11_dep],
       cpp_args: cpp_args,
+      subdir: 'nilvec',
       install: true,
+    )
+    
+    py.install_sources(
+      ['nilvec/__init__.py', 'nilvec/benchmark.py'],
+      subdir: 'nilvec',
     )
   else
     warning('pybind11 not found, skipping Python bindings')

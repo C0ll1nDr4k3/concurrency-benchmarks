@@ -17,7 +17,7 @@
 namespace py = pybind11;
 using namespace nilvec;
 
-PYBIND11_MODULE(nilvec, m) {
+PYBIND11_MODULE(_nilvec, m) {
   m.doc() = "Python bindings for NilVec ANN indexes";
 
   // Bind SearchResult
