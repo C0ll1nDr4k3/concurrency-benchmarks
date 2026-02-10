@@ -42,6 +42,18 @@ except ImportError:
     weaviate = None
 
 try:
+    import qdrant_client
+except ImportError:
+    print(f"{Fore.YELLOW}Qdrant not installed{Style.RESET_ALL}")
+    qdrant_client = None
+
+try:
+    import redis
+except ImportError:
+    print(f"{Fore.YELLOW}Redis client not installed{Style.RESET_ALL}")
+    redis = None
+
+try:
     from . import _nilvec as nilvec
 except ImportError:
     try:
@@ -72,12 +84,45 @@ ICON_MAPPING = {
 
 # Color mapping: "Substring": "color"
 COLOR_MAPPING = {
-    "FAISS": "#1877F2",    # Facebook Blue
+    "FAISS": "#1877F2",  # Facebook Blue
     "USearch": "#192940",  # Dark Blue
-    "Weaviate": "#ddd347", # Yellow
+    "Weaviate": "#ddd347",  # Yellow
+    "Qdrant": "#dc244c",  # Raspberry Red
+    "Redis": "#d82c20",  # Redis Red
 }
 
 # --- Wrappers ---
+
+
+def format_benchmark_header(name, rw_ratio):
+    if name in {"Qdrant", "Redis", "Weaviate", "USearch"} or "FAISS" in name:
+        name_color = Fore.MAGENTA
+    else:
+        name_color = Fore.CYAN
+    return (
+        f"\n{Style.BRIGHT}{Fore.CYAN}Benchmarking Throughput{Style.RESET_ALL} "
+        f"{Fore.WHITE}(W/R={rw_ratio}){Style.RESET_ALL}: "
+        f"{Style.BRIGHT}{name_color}{name}{Style.RESET_ALL}"
+    )
+
+
+def format_throughput_line(
+    num_threads, num_insert_threads, num_search_threads, throughput, prev
+):
+    if prev is None:
+        throughput_color = Fore.CYAN
+    elif throughput >= prev * 1.05:
+        throughput_color = Fore.GREEN
+    elif throughput <= prev * 0.95:
+        throughput_color = Fore.RED
+    else:
+        throughput_color = Fore.YELLOW
+    return (
+        f"  {Fore.BLUE}Threads:{Style.RESET_ALL} {num_threads} "
+        f"{Fore.WHITE}(W={num_insert_threads}, R={num_search_threads}){Style.RESET_ALL} -> "
+        f"{Fore.BLUE}Throughput:{Style.RESET_ALL} "
+        f"{Style.BRIGHT}{throughput_color}{throughput:.0f}{Style.RESET_ALL} ops/s"
+    )
 
 
 class FaissHNSW:
@@ -237,7 +282,12 @@ class WeaviateIndex:
             raise ImportError("weaviate-client not installed")
 
         # Connect to embedded Weaviate
-        self.client = weaviate.connect_to_embedded()
+        self.client = weaviate.connect_to_embedded(
+            environment_variables={
+                "LOG_LEVEL": "error",  # or "fatal"/"panic" for even less
+                "DISABLE_TELEMETRY": "true",  # optional, removes telemetry chatter
+            }
+        )
         self.collection_name = "NilVecBench"
 
         if self.client.collections.exists(self.collection_name):
@@ -281,6 +331,166 @@ class WeaviateIndex:
 
     def close(self):
         self.client.close()
+
+
+class QdrantIndex:
+    def __init__(self, dim, M=16, ef_construction=200):
+        try:
+            from qdrant_client import QdrantClient
+            from qdrant_client.models import Distance, HnswConfigDiff, VectorParams
+        except ImportError:
+            raise ImportError("qdrant-client not installed")
+
+        self.client = QdrantClient(path="./qdrant_data")
+        self.collection_name = "nilvec_bench_qdrant"
+        self._next_id = 0
+        self._id_lock = threading.Lock()
+
+        if self.client.collection_exists(self.collection_name):
+            self.client.delete_collection(self.collection_name)
+
+        self.client.create_collection(
+            collection_name=self.collection_name,
+            vectors_config=VectorParams(size=dim, distance=Distance.EUCLID),
+            hnsw_config=HnswConfigDiff(m=M, ef_construct=ef_construction),
+        )
+
+    def insert(self, vec):
+        from qdrant_client.models import PointStruct
+
+        with self._id_lock:
+            point_id = self._next_id
+            self._next_id += 1
+
+        self.client.upsert(
+            collection_name=self.collection_name,
+            points=[PointStruct(id=point_id, vector=vec)],
+            wait=True,
+        )
+
+    def search(self, query, k, ef=None):
+        from qdrant_client.models import SearchParams
+
+        params = SearchParams(hnsw_ef=ef) if ef is not None else None
+        if hasattr(self.client, "search"):
+            res = self.client.search(
+                collection_name=self.collection_name,
+                query_vector=query,
+                limit=k,
+                search_params=params,
+                with_payload=False,
+                with_vectors=False,
+            )
+        else:
+            query_res = self.client.query_points(
+                collection_name=self.collection_name,
+                query=query,
+                limit=k,
+                search_params=params,
+                with_payload=False,
+                with_vectors=False,
+            )
+            res = query_res.points
+
+        ids = [hit.id for hit in res]
+        distances = [hit.score for hit in res]
+        return type("Result", (object,), {"ids": ids, "distances": distances})()
+
+    def train(self, data):
+        pass
+
+    def set_nprobe(self, n):
+        pass
+
+    def close(self):
+        if hasattr(self.client, "close"):
+            self.client.close()
+
+
+class RedisIndex:
+    def __init__(self, dim, M=16, ef_construction=200):
+        try:
+            import redis
+            from redis.commands.search.field import VectorField
+            from redis.commands.search.index_definition import (
+                IndexDefinition,
+                IndexType,
+            )
+        except ImportError:
+            raise ImportError("redis not installed")
+
+        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+        self.client = redis.Redis.from_url(redis_url, decode_responses=False)
+        self.index_name = "idx:nilvec_bench"
+        self.prefix = "nilvec:vec:"
+        self._next_id = 0
+        self._id_lock = threading.Lock()
+
+        try:
+            self.client.ft(self.index_name).dropindex(delete_documents=True)
+        except Exception:
+            pass
+
+        schema = (
+            VectorField(
+                "vector",
+                "HNSW",
+                {
+                    "TYPE": "FLOAT32",
+                    "DIM": dim,
+                    "DISTANCE_METRIC": "L2",
+                    "M": M,
+                    "EF_CONSTRUCTION": ef_construction,
+                },
+            ),
+        )
+        definition = IndexDefinition(prefix=[self.prefix], index_type=IndexType.HASH)
+        self.client.ft(self.index_name).create_index(schema, definition=definition)
+
+    def insert(self, vec):
+        with self._id_lock:
+            point_id = self._next_id
+            self._next_id += 1
+
+        key = f"{self.prefix}{point_id}"
+        self.client.hset(
+            key,
+            mapping={"vector": np.array(vec, dtype=np.float32).tobytes()},
+        )
+
+    def search(self, query, k, ef=None):
+        from redis.commands.search.query import Query
+
+        q = (
+            Query(f"*=>[KNN {k} @vector $vec AS score]")
+            .return_fields("score")
+            .sort_by("score")
+            .dialect(2)
+        )
+        if ef is not None:
+            q = q.ef_runtime(int(ef))
+
+        res = self.client.ft(self.index_name).search(
+            q, query_params={"vec": np.array(query, dtype=np.float32).tobytes()}
+        )
+
+        ids = []
+        distances = []
+        for doc in res.docs:
+            doc_id = doc.id.decode() if isinstance(doc.id, bytes) else str(doc.id)
+            ids.append(doc_id.split(self.prefix, 1)[-1])
+            distances.append(float(doc.score))
+        return type("Result", (object,), {"ids": ids, "distances": distances})()
+
+    def train(self, data):
+        pass
+
+    def set_nprobe(self, n):
+        pass
+
+    def close(self):
+        if hasattr(self.client, "close"):
+            self.client.close()
 
 
 # --- Helpers ---
@@ -513,15 +723,15 @@ def benchmark_throughput_vs_threads(
     if index_args is None:
         index_args = []
 
-    print(f"\nBenchmarking Throughput (W/R={rw_ratio}): {index_name}")
+    print(format_benchmark_header(index_name, rw_ratio))
     results = []
     conflict_rates = []
-    
+
     stop_event = threading.Event()
 
     for num_threads in THREAD_COUNTS:
         if stop_event.is_set():
-             break
+            break
 
         # Re-create index for each run to be clean
         if "IVF" in index_name:
@@ -548,9 +758,11 @@ def benchmark_throughput_vs_threads(
             local_ops = 0
             # Run for fixed iterations
             for _ in range(5):
-                if stop_event.is_set(): break
+                if stop_event.is_set():
+                    break
                 for q in qs:
-                    if stop_event.is_set(): break
+                    if stop_event.is_set():
+                        break
                     index.search(q, k)
                     local_ops += 1
             return local_ops
@@ -559,7 +771,8 @@ def benchmark_throughput_vs_threads(
             nonlocal ops_count
             local_ops = 0
             for v in vecs:
-                if stop_event.is_set(): break
+                if stop_event.is_set():
+                    break
                 index.insert(v)
                 local_ops += 1
             return local_ops
@@ -606,15 +819,15 @@ def benchmark_throughput_vs_threads(
                 while t.is_alive():
                     t.join(timeout=0.5)
         except KeyboardInterrupt:
-             print(f"\nSkipping {index_name}: Operation has been terminated")
-             stop_event.set()
-             # Cleanup threads
-             for t in threads:
-                 t.join(timeout=0.1)
-             
-             if hasattr(index, "close"):
-                 index.close()
-             return None, None
+            print(f"\nSkipping {index_name}: Operation has been terminated")
+            stop_event.set()
+            # Cleanup threads
+            for t in threads:
+                t.join(timeout=0.1)
+
+            if hasattr(index, "close"):
+                index.close()
+            return None, None
 
         duration = time.time() - start_time
 
@@ -629,8 +842,11 @@ def benchmark_throughput_vs_threads(
 
         total_ops = total_inserts + total_searches
         throughput = total_ops / duration
+        prev = results[-1] if results else None
         print(
-            f"  Threads: {num_threads} (W={num_insert_threads}, R={num_search_threads}) -> Throughput: {throughput:.0f} ops/s"
+            format_throughput_line(
+                num_threads, num_insert_threads, num_search_threads, throughput, prev
+            )
         )
         results.append(throughput)
 
@@ -669,17 +885,21 @@ def run_benchmark(args=None):
             help="Read/Write ratio (0.0=Read, 1.0=Write)",
         )
         parser.add_argument(
-            "--limit", type=int, default=0, help="Limit number of vectors (0 = no limit)"
+            "--limit",
+            type=int,
+            default=0,
+            help="Limit number of vectors (0 = no limit)",
         )
         parser.add_argument(
             "--only-external", action="store_true", help="Run only external benchmarks"
         )
         parser.add_argument(
-            "--save-results", type=str, default="benchmark_results.pkl", help="File to save results to"
+            "--save-results",
+            type=str,
+            default="benchmark_results.pkl",
+            help="File to save results to",
         )
         args = parser.parse_args()
-
-
 
     # Load Data
     # Check if we likely have a valid dataset to load
@@ -705,10 +925,8 @@ def run_benchmark(args=None):
         data = generate_data(NUM_VECTORS, DIM)
         queries = generate_data(NUM_QUERIES, DIM)
         gt = get_ground_truth(data, queries, K)
-    
+
     print(f"Dataset: N={NUM_VECTORS}, Q={NUM_QUERIES}, Dim={DIM}")
-
-
 
     results_cache = {
         "recall_vs_qps": {"runs": [], "K": K, "DIM": DIM},
@@ -716,7 +934,7 @@ def run_benchmark(args=None):
         "conflicts": {},
         "thread_counts": THREAD_COUNTS,
         "rw_ratio": args.rw_ratio,
-        "external_names": []
+        "external_names": [],
     }
 
     # Indexes to test
@@ -746,7 +964,9 @@ def run_benchmark(args=None):
             hnsw_params,
         )
         recalls, qps = zip(*res)
-        results_cache["recall_vs_qps"]["runs"].append(("HNSW Vanilla", recalls, qps, "o-"))
+        results_cache["recall_vs_qps"]["runs"].append(
+            ("HNSW Vanilla", recalls, qps, "o-")
+        )
         plt.plot(recalls, qps, "o-", label="HNSW Vanilla")
 
         # IVFFlat Variants
@@ -764,7 +984,9 @@ def run_benchmark(args=None):
             ivf_params,
         )
         recalls, qps = zip(*res)
-        results_cache["recall_vs_qps"]["runs"].append(("IVFFlat Vanilla", recalls, qps, "s-"))
+        results_cache["recall_vs_qps"]["runs"].append(
+            ("IVFFlat Vanilla", recalls, qps, "s-")
+        )
         plt.plot(recalls, qps, "s-", label="IVFFlat Vanilla")
 
         plt.xlabel("Recall")
@@ -822,6 +1044,10 @@ def run_benchmark(args=None):
         #     externals.append((MilvusIndex, "Milvus", hnsw_args))
         if weaviate:
             externals.append((WeaviateIndex, "Weaviate", hnsw_args))
+        if qdrant_client:
+            externals.append((QdrantIndex, "Qdrant", hnsw_args))
+        if redis:
+            externals.append((RedisIndex, "Redis", hnsw_args))
 
         for cls, name, iargs in externals:
             try:
@@ -844,7 +1070,6 @@ def run_benchmark(args=None):
         # Plot 1: Throughput
         plt.figure(figsize=(8, 6))
         ax = plt.gca()
-
 
         loaded_icons = {}
         for key, (path, zoom) in ICON_MAPPING.items():
@@ -876,7 +1101,7 @@ def run_benchmark(args=None):
                 plt.plot(THREAD_COUNTS, res, "--", label=name, alpha=0.75, color=color)
                 for x, y in zip(THREAD_COUNTS, res):
                     im = OffsetImage(img, zoom=zoom)
-                    ab = AnnotationBbox(im, (x, y), xycoords='data', frameon=False)
+                    ab = AnnotationBbox(im, (x, y), xycoords="data", frameon=False)
                     ax.add_artist(ab)
             else:
                 style = "*--" if name in external_names else "o-"

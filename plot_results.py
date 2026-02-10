@@ -4,6 +4,7 @@ import matplotlib.image as mpimg
 from matplotlib.offsetbox import OffsetImage, AnnotationBbox
 import argparse
 import os
+
 try:
     from nilvec.benchmark import ICON_MAPPING, COLOR_MAPPING
 except ImportError:
@@ -11,6 +12,7 @@ except ImportError:
     ICON_MAPPING = {}
     COLOR_MAPPING = {}
     print("Warning: nilvec not found, icons and colors might be missing")
+
 
 def plot_results(results_path, output_dir="paper/plots", dpi=1200):
     if not os.path.exists(results_path):
@@ -27,13 +29,13 @@ def plot_results(results_path, output_dir="paper/plots", dpi=1200):
     if "recall_vs_qps" in data and data["recall_vs_qps"]:
         print("Plotting Recall vs QPS...")
         plt.figure(figsize=(10, 6))
-        
+
         recall_data = data["recall_vs_qps"]
         K = recall_data.get("K", 10)
         DIM = recall_data.get("DIM", 128)
-        
+
         for name, recalls, qps, style in recall_data.get("runs", []):
-             plt.plot(recalls, qps, style, label=name)
+            plt.plot(recalls, qps, style, label=name)
 
         plt.xlabel("Recall")
         plt.ylabel("QPS (log scale)")
@@ -72,7 +74,7 @@ def plot_results(results_path, output_dir="paper/plots", dpi=1200):
                 if key in name:
                     icon_data = (img, zoom)
                     break
-            
+
             # Check for color match
             color = None
             for key, c in COLOR_MAPPING.items():
@@ -85,7 +87,7 @@ def plot_results(results_path, output_dir="paper/plots", dpi=1200):
                 plt.plot(thread_counts, res, "--", label=name, alpha=0.75, color=color)
                 for x, y in zip(thread_counts, res):
                     im = OffsetImage(img, zoom=zoom)
-                    ab = AnnotationBbox(im, (x, y), xycoords='data', frameon=False)
+                    ab = AnnotationBbox(im, (x, y), xycoords="data", frameon=False)
                     ax.add_artist(ab)
             else:
                 style = "*--" if name in external_names else "o-"
@@ -108,7 +110,7 @@ def plot_results(results_path, output_dir="paper/plots", dpi=1200):
         plt.figure(figsize=(8, 6))
         conflict_results = data["conflicts"]
         thread_counts = data["thread_counts"]
-        
+
         has_conflicts = False
         for name, conflicts in conflict_results.items():
             if "Opt" in name:
@@ -127,11 +129,21 @@ def plot_results(results_path, output_dir="paper/plots", dpi=1200):
             print(f"Saved {out_path}")
         plt.close()
 
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Plot benchmark results from cached file")
-    parser.add_argument("--results", type=str, default="benchmark_results.pkl", help="Path to pickle file")
-    parser.add_argument("--out", type=str, default="paper/plots", help="Output directory")
+    parser = argparse.ArgumentParser(
+        description="Plot benchmark results from cached file"
+    )
+    parser.add_argument(
+        "--results",
+        type=str,
+        default="benchmark_results.pkl",
+        help="Path to pickle file",
+    )
+    parser.add_argument(
+        "--out", type=str, default="paper/plots", help="Output directory"
+    )
     parser.add_argument("--dpi", type=int, default=1200, help="DPI for plots")
-    
+
     args = parser.parse_args()
     plot_results(args.results, args.out, args.dpi)

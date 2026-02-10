@@ -4,6 +4,7 @@ data/
 *.db-journal
 *.db.lock
 *.pkl
+*.env
 
 
 .cache

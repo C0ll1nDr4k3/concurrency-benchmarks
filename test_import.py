@@ -1,6 +1,8 @@
 import nilvec
+
 print("Imported nilvec:", nilvec)
 import nilvec.benchmark
+
 print("Imported nilvec.benchmark")
 try:
     idx = nilvec.HNSWVanilla(128)

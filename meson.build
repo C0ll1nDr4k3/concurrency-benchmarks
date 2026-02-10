@@ -16,6 +16,7 @@ project(
 # Build options
 track_conflicts = get_option('track_conflicts')
 use_hdf5 = get_option('use_hdf5')
+python_bindings = get_option('python_bindings')
 
 # Thread support
 thread_dep = dependency('threads')
@@ -59,7 +60,7 @@ test('basic', exe)
 py_mod = import('python')
 py = py_mod.find_installation(required: false, pure: false)
 
-if py.found()
+if python_bindings and py.found()
   pybind11_dep = dependency('pybind11', required: true)
   
   if pybind11_dep.found()

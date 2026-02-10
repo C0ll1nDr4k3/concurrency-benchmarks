@@ -13,6 +13,8 @@ dependencies = [
     "pymilvus",
     "milvus-lite",
     "weaviate-client",
+    "qdrant-client",
+    "redis",
     "faiss-cpu>=1.13.2",
     "colorama",
 ]
