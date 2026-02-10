@@ -93,7 +93,7 @@ ICON_MAPPING = {
     "USearch": ("paper/imgs/usearch.png", 0.015),
     "Weaviate": ("paper/imgs/weaviate.png", 0.015),
     "Qdrant": ("paper/imgs/qdrant.png", 0.005),
-    "Redis": ("paper/imgs/redis.png", 0.02),
+    "Redis": ("paper/imgs/redis.png", 0.015),
 }
 
 # Color mapping: "Substring": "color"
