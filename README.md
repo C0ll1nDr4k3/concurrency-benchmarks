@@ -92,24 +92,21 @@ uv run main.py --dataset data/sift-128-euclidean.hdf5 --results-db benchmark_res
 uv run main.py --dataset data/sift-128-euclidean.hdf5 --save-results benchmark_results.pkl
 ```
 
-### Generated Plots
-Plots are saved to the `paper/plots/` directory:
-*   `throughput_scaling.svg`: Throughput vs. Thread Count.
-*   `recall_vs_qps.svg`: Recall vs. QPS (if recall benchmark is run).
-*   `conflict_rate.svg`: Conflict rate vs. thread count (optimistic variants).
-
 ## Latest Benchmarks
 
 Latest committed benchmark figures:
 
 ### Throughput Scaling
 ![Latest Throughput Scaling](paper/plots/throughput_scaling.svg)
+Throughput vs. Thread Count.
 
 ### Recall vs QPS
 ![Latest Recall vs QPS](paper/plots/recall_vs_qps.svg)
+Recall vs. QPS.
 
 ### Conflict Rate
 ![Latest Conflict Rate](paper/plots/conflict_rate.svg)
+Conflict rate vs. thread count (optimistic variants).
 
 ## Testing
 

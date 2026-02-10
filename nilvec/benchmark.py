@@ -5,6 +5,8 @@ import random
 import argparse
 import json
 import uuid
+import subprocess
+from urllib.parse import urlparse
 import numpy as np
 import threading
 import tempfile
@@ -672,6 +674,120 @@ def get_ground_truth(data, queries, k):
     return gt
 
 
+def _run_command(command):
+    return subprocess.run(command, check=False, capture_output=True, text=True)
+
+
+def _redis_url_is_local(redis_url):
+    parsed = urlparse(redis_url)
+    if parsed.scheme not in {"redis", "rediss"}:
+        return False
+    return parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+
+
+def _start_redis_stack_container(redis_url):
+    if not _redis_url_is_local(redis_url):
+        return False, "auto-start supports only localhost REDIS_URL values"
+
+    parsed = urlparse(redis_url)
+    host_port = parsed.port or 6379
+    container_name = os.getenv("REDIS_STACK_CONTAINER_NAME", "nilvec-redis-stack")
+    image = os.getenv("REDIS_STACK_IMAGE", "redis/redis-stack:latest")
+
+    docker_check = _run_command(["docker", "--version"])
+    if docker_check.returncode != 0:
+        stderr = docker_check.stderr.strip()
+        if stderr:
+            return False, f"docker not available ({stderr})"
+        return False, "docker not available"
+
+    running = _run_command(
+        [
+            "docker",
+            "ps",
+            "--filter",
+            f"name=^/{container_name}$",
+            "--format",
+            "{{.ID}}",
+        ]
+    )
+    if running.returncode == 0 and running.stdout.strip():
+        return True, f"container {container_name} already running"
+
+    existing = _run_command(
+        [
+            "docker",
+            "ps",
+            "-a",
+            "--filter",
+            f"name=^/{container_name}$",
+            "--format",
+            "{{.ID}}",
+        ]
+    )
+    if existing.returncode == 0 and existing.stdout.strip():
+        started = _run_command(["docker", "start", container_name])
+        if started.returncode != 0:
+            return False, started.stderr.strip() or f"failed to start {container_name}"
+        return True, f"started container {container_name}"
+
+    created = _run_command(
+        [
+            "docker",
+            "run",
+            "--name",
+            container_name,
+            "-p",
+            f"{host_port}:6379",
+            "-d",
+            image,
+        ]
+    )
+    if created.returncode != 0:
+        return (
+            False,
+            created.stderr.strip()
+            or f"failed to run docker container {container_name} ({image})",
+        )
+    return True, f"started new container {container_name} ({image})"
+
+
+def redis_benchmark_ready(auto_start=False):
+    if redis is None:
+        return False, "redis client not installed"
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    try:
+        client = redis.Redis.from_url(redis_url, decode_responses=False)
+        client.ping()
+        client.close()
+        return True, redis_url
+    except Exception as e:
+        if not auto_start:
+            return False, f"{redis_url} ({e})"
+
+        started, start_info = _start_redis_stack_container(redis_url)
+        if not started:
+            return False, f"{redis_url} ({e}); auto-start failed: {start_info}"
+
+        wait_timeout_s = 20
+        start = time.time()
+        last_error = str(e)
+        while time.time() - start < wait_timeout_s:
+            try:
+                client = redis.Redis.from_url(redis_url, decode_responses=False)
+                client.ping()
+                client.close()
+                return True, f"{redis_url} ({start_info})"
+            except Exception as retry_error:
+                last_error = str(retry_error)
+                time.sleep(1)
+
+        return (
+            False,
+            f"{redis_url} (auto-started but not ready after {wait_timeout_s}s: {last_error})",
+        )
+
+
 class BenchmarkResultsStore:
     def __init__(self, db_path):
         if duckdb is None:
@@ -1199,6 +1315,18 @@ def run_benchmark(args=None):
             default="",
             help="Optional label to tag this benchmark run in results DB",
         )
+        parser.add_argument(
+            "--auto-start-redis",
+            action="store_true",
+            default=True,
+            help="Attempt to auto-start redis/redis-stack via Docker if REDIS_URL is unreachable (default: enabled)",
+        )
+        parser.add_argument(
+            "--no-auto-start-redis",
+            action="store_false",
+            dest="auto_start_redis",
+            help="Disable Docker auto-start for Redis benchmark preflight",
+        )
         args = parser.parse_args()
 
     # Load Data
@@ -1384,10 +1512,21 @@ def run_benchmark(args=None):
         #     externals.append((MilvusIndex, "Milvus", hnsw_args))
         if weaviate:
             externals.append((WeaviateIndex, "Weaviate", hnsw_args))
-        if qdrant_client:
-            externals.append((QdrantIndex, "Qdrant", hnsw_args))
-        if redis:
+        # Omitted becasue it takes 30 min (alone) on a small dataset
+        # if qdrant_client:
+        #     externals.append((QdrantIndex, "Qdrant", hnsw_args))
+        redis_ready, redis_info = redis_benchmark_ready(
+            auto_start=args.auto_start_redis
+        )
+        if redis_ready:
             externals.append((RedisIndex, "Redis", hnsw_args))
+        elif redis is not None:
+            print(
+                f"{Fore.YELLOW}Skipping Redis benchmark preflight: cannot connect to {redis_info}.{Style.RESET_ALL}\n"
+                f"{Fore.YELLOW}Hint:{Style.RESET_ALL} set REDIS_URL, ensure Docker is running for auto-start, or start Redis Stack manually:\n"
+                "  docker run -p 6379:6379 -d redis/redis-stack:latest\n"
+                "  (use --no-auto-start-redis to disable Docker auto-start)"
+            )
 
         for cls, name, iargs in externals:
             try:

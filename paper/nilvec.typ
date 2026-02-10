@@ -98,13 +98,17 @@ To contextualize the performance of our fine-grained locking implementations, we
 
 == Experimental Environment
 
-All experiments were conducted on a machine architecture with Apple Silicon (ARM64). The benchmarking harness is implemented in Python, interacting with the core C++ index implementations via bindings to ensure minimal overhead.
+All experiments were conducted on a Lenovo Legion Pro 7 16IAX10H with an Intel Core Ultra 9 275HX CPU (24 total cores: 8P+16E) and 32 GiB RAM. CPU-only measurements are reported for throughput and recall; GPU acceleration was excluded from the primary comparisons to keep index implementations on a consistent execution target. The benchmarking harness is implemented in Python and invokes the core C++ index implementations through bindings to minimize orchestration overhead.
+
+Google Colab was not used for primary CPU benchmark reporting because runtime hardware and scheduling are not fixed across sessions, which reduces reproducibility for multi-thread scaling comparisons.
 
 = Results
 
 == Throughput
 
 Incidentaly, the lower a dataset's throughput, the higher is cluster density.
+
+Qdrant was omitted from the plotted throughput comparison because its performance was substantially lower and did not scale with thread count in this workload (2 threads: 561 ops/s, 4: 537 ops/s, 8: 571 ops/s, 16: 530 ops/s).
 
 #figure(
   image("plots/throughput_scaling.svg", width: 80%),
