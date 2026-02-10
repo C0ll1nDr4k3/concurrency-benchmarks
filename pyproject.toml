@@ -9,6 +9,7 @@ dependencies = [
     "matplotlib",
     "numpy",
     "requests",
+    "duckdb",
     "usearch",
     "pymilvus",
     "milvus-lite",

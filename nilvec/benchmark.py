@@ -3,8 +3,12 @@ import os
 import time
 import random
 import argparse
+import json
+import uuid
 import numpy as np
 import threading
+import tempfile
+import shutil
 import matplotlib.pyplot as plt
 import h5py
 import requests
@@ -52,6 +56,12 @@ try:
 except ImportError:
     print(f"{Fore.YELLOW}Redis client not installed{Style.RESET_ALL}")
     redis = None
+
+try:
+    import duckdb
+except ImportError:
+    print(f"{Fore.YELLOW}duckdb not installed{Style.RESET_ALL}")
+    duckdb = None
 
 try:
     from . import _nilvec as nilvec
@@ -284,7 +294,7 @@ class WeaviateIndex:
         # Connect to embedded Weaviate
         self.client = weaviate.connect_to_embedded(
             environment_variables={
-                "LOG_LEVEL": "error",  # or "fatal"/"panic" for even less
+                "LOG_LEVEL": "fatal",  # or "fatal"/"panic" for even less
                 "DISABLE_TELEMETRY": "true",  # optional, removes telemetry chatter
             }
         )
@@ -296,10 +306,11 @@ class WeaviateIndex:
         # Create collection
         self.client.collections.create(
             name=self.collection_name,
-            vectorizer_config=wvc.Configure.Vectorizer.none(),
-            vector_index_config=wvc.Configure.VectorIndex.hnsw(
-                ef_construction=ef_construction,
-                max_connections=M,
+            vector_config=wvc.Configure.Vectors.self_provided(
+                vector_index_config=wvc.Configure.VectorIndex.hnsw(
+                    ef_construction=ef_construction,
+                    max_connections=M,
+                )
             ),
             properties=[wvc.Property(name="dummy", data_type=wvc.DataType.INT)],
         )
@@ -341,10 +352,14 @@ class QdrantIndex:
         except ImportError:
             raise ImportError("qdrant-client not installed")
 
-        self.client = QdrantClient(path="./qdrant_data")
+        self._tmp_dir = tempfile.mkdtemp(prefix="nilvec_qdrant_")
+        self.client = QdrantClient(path=self._tmp_dir)
         self.collection_name = "nilvec_bench_qdrant"
         self._next_id = 0
         self._id_lock = threading.Lock()
+        # Qdrant local backend isn't safe for concurrent search+upsert on one collection.
+        # Serialize operations to avoid internal shape/race errors.
+        self._op_lock = threading.Lock()
 
         if self.client.collection_exists(self.collection_name):
             self.client.delete_collection(self.collection_name)
@@ -362,35 +377,37 @@ class QdrantIndex:
             point_id = self._next_id
             self._next_id += 1
 
-        self.client.upsert(
-            collection_name=self.collection_name,
-            points=[PointStruct(id=point_id, vector=vec)],
-            wait=True,
-        )
+        with self._op_lock:
+            self.client.upsert(
+                collection_name=self.collection_name,
+                points=[PointStruct(id=point_id, vector=vec)],
+                wait=True,
+            )
 
     def search(self, query, k, ef=None):
         from qdrant_client.models import SearchParams
 
         params = SearchParams(hnsw_ef=ef) if ef is not None else None
-        if hasattr(self.client, "search"):
-            res = self.client.search(
-                collection_name=self.collection_name,
-                query_vector=query,
-                limit=k,
-                search_params=params,
-                with_payload=False,
-                with_vectors=False,
-            )
-        else:
-            query_res = self.client.query_points(
-                collection_name=self.collection_name,
-                query=query,
-                limit=k,
-                search_params=params,
-                with_payload=False,
-                with_vectors=False,
-            )
-            res = query_res.points
+        with self._op_lock:
+            if hasattr(self.client, "search"):
+                res = self.client.search(
+                    collection_name=self.collection_name,
+                    query_vector=query,
+                    limit=k,
+                    search_params=params,
+                    with_payload=False,
+                    with_vectors=False,
+                )
+            else:
+                query_res = self.client.query_points(
+                    collection_name=self.collection_name,
+                    query=query,
+                    limit=k,
+                    search_params=params,
+                    with_payload=False,
+                    with_vectors=False,
+                )
+                res = query_res.points
 
         ids = [hit.id for hit in res]
         distances = [hit.score for hit in res]
@@ -405,6 +422,8 @@ class QdrantIndex:
     def close(self):
         if hasattr(self.client, "close"):
             self.client.close()
+        if getattr(self, "_tmp_dir", None) and os.path.isdir(self._tmp_dir):
+            shutil.rmtree(self._tmp_dir, ignore_errors=True)
 
 
 class RedisIndex:
@@ -653,6 +672,263 @@ def get_ground_truth(data, queries, k):
     return gt
 
 
+class BenchmarkResultsStore:
+    def __init__(self, db_path):
+        if duckdb is None:
+            raise ImportError("duckdb not installed")
+        self.db_path = db_path
+        self.conn = duckdb.connect(db_path)
+        self._init_schema()
+
+    def _init_schema(self):
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS benchmark_runs (
+                run_id VARCHAR PRIMARY KEY,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                run_tag VARCHAR,
+                dataset_name VARCHAR,
+                dataset_path VARCHAR,
+                dim INTEGER,
+                num_vectors INTEGER,
+                num_queries INTEGER,
+                k INTEGER,
+                rw_ratio DOUBLE,
+                thread_counts_json VARCHAR,
+                only_external BOOLEAN,
+                skip_recall BOOLEAN,
+                skip_throughput BOOLEAN,
+                limit_rows INTEGER
+            )
+            """
+        )
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS throughput_points (
+                run_id VARCHAR,
+                index_name VARCHAR,
+                thread_count INTEGER,
+                throughput DOUBLE,
+                conflict_rate DOUBLE,
+                is_external BOOLEAN
+            )
+            """
+        )
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS recall_points (
+                run_id VARCHAR,
+                index_name VARCHAR,
+                param_key VARCHAR,
+                recall DOUBLE,
+                qps DOUBLE,
+                line_style VARCHAR,
+                point_order INTEGER
+            )
+            """
+        )
+
+    def start_run(self, run_meta):
+        run_id = str(uuid.uuid4())
+        self.conn.execute(
+            """
+            INSERT INTO benchmark_runs (
+                run_id, run_tag, dataset_name, dataset_path, dim, num_vectors,
+                num_queries, k, rw_ratio, thread_counts_json, only_external,
+                skip_recall, skip_throughput, limit_rows
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                run_id,
+                run_meta.get("run_tag"),
+                run_meta["dataset_name"],
+                run_meta["dataset_path"],
+                run_meta["dim"],
+                run_meta["num_vectors"],
+                run_meta["num_queries"],
+                run_meta["k"],
+                run_meta["rw_ratio"],
+                json.dumps(run_meta["thread_counts"]),
+                run_meta["only_external"],
+                run_meta["skip_recall"],
+                run_meta["skip_throughput"],
+                run_meta["limit_rows"],
+            ],
+        )
+        return run_id
+
+    def save_throughput(
+        self, run_id, throughput_results, conflict_results, external_names, thread_counts
+    ):
+        rows = []
+        for index_name, values in throughput_results.items():
+            conflicts = conflict_results.get(index_name, [0] * len(values))
+            is_external = index_name in set(external_names)
+            for thread_count, throughput, conflict_rate in zip(
+                thread_counts, values, conflicts
+            ):
+                rows.append(
+                    (
+                        run_id,
+                        index_name,
+                        int(thread_count),
+                        float(throughput),
+                        float(conflict_rate),
+                        bool(is_external),
+                    )
+                )
+        if rows:
+            self.conn.executemany(
+                """
+                INSERT INTO throughput_points (
+                    run_id, index_name, thread_count, throughput, conflict_rate, is_external
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
+
+    def save_recall_runs(self, run_id, recall_runs):
+        rows = []
+        for index_name, recalls, qps, line_style in recall_runs:
+            for i, (recall, qps_val) in enumerate(zip(recalls, qps)):
+                rows.append(
+                    (
+                        run_id,
+                        index_name,
+                        f"{index_name}:{i}",
+                        float(recall),
+                        float(qps_val),
+                        line_style,
+                        i,
+                    )
+                )
+        if rows:
+            self.conn.executemany(
+                """
+                INSERT INTO recall_points (
+                    run_id, index_name, param_key, recall, qps, line_style, point_order
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
+
+    def _compatible_where(self, meta):
+        return """
+            dataset_name = ? AND dim = ? AND num_vectors = ? AND num_queries = ?
+            AND k = ? AND rw_ratio = ? AND thread_counts_json = ?
+        """, [
+            meta["dataset_name"],
+            meta["dim"],
+            meta["num_vectors"],
+            meta["num_queries"],
+            meta["k"],
+            meta["rw_ratio"],
+            json.dumps(meta["thread_counts"]),
+        ]
+
+    def cross_pollinate_throughput(
+        self, meta, run_id, throughput_results, conflict_results, external_names
+    ):
+        where_clause, params = self._compatible_where(meta)
+        rows = self.conn.execute(
+            f"""
+            WITH matching_runs AS (
+                SELECT run_id, created_at
+                FROM benchmark_runs
+                WHERE {where_clause}
+                  AND run_id != ?
+            ),
+            ranked_points AS (
+                SELECT
+                    tp.index_name,
+                    tp.thread_count,
+                    tp.throughput,
+                    tp.conflict_rate,
+                    tp.is_external,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY tp.index_name, tp.thread_count
+                        ORDER BY mr.created_at DESC
+                    ) AS rn
+                FROM throughput_points tp
+                JOIN matching_runs mr ON tp.run_id = mr.run_id
+            )
+            SELECT index_name, thread_count, throughput, conflict_rate, is_external
+            FROM ranked_points
+            WHERE rn = 1
+            """,
+            params + [run_id],
+        ).fetchall()
+
+        thread_pos = {t: i for i, t in enumerate(meta["thread_counts"])}
+        injected_indexes = set()
+        external_set = set(external_names)
+        for index_name, thread_count, throughput, conflict_rate, is_external in rows:
+            if thread_count not in thread_pos:
+                continue
+            if index_name not in throughput_results:
+                throughput_results[index_name] = [float("nan")] * len(meta["thread_counts"])
+                conflict_results[index_name] = [float("nan")] * len(meta["thread_counts"])
+                injected_indexes.add(index_name)
+            i = thread_pos[thread_count]
+            if np.isnan(throughput_results[index_name][i]):
+                throughput_results[index_name][i] = float(throughput)
+            if np.isnan(conflict_results[index_name][i]):
+                conflict_results[index_name][i] = float(conflict_rate)
+            if is_external:
+                external_set.add(index_name)
+        return throughput_results, conflict_results, sorted(external_set), sorted(injected_indexes)
+
+    def cross_pollinate_recall(self, meta, run_id, existing_runs):
+        existing_names = {name for name, _, _, _ in existing_runs}
+        where_clause, params = self._compatible_where(meta)
+        rows = self.conn.execute(
+            f"""
+            WITH matching_runs AS (
+                SELECT run_id, created_at
+                FROM benchmark_runs
+                WHERE {where_clause}
+                  AND run_id != ?
+            ),
+            latest_by_index AS (
+                SELECT
+                    rp.index_name,
+                    rp.run_id,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY rp.index_name
+                        ORDER BY mr.created_at DESC
+                    ) AS rn
+                FROM recall_points rp
+                JOIN matching_runs mr ON rp.run_id = mr.run_id
+            )
+            SELECT rp.index_name, rp.recall, rp.qps, rp.line_style, rp.point_order
+            FROM latest_by_index lbi
+            JOIN recall_points rp
+              ON rp.run_id = lbi.run_id
+             AND rp.index_name = lbi.index_name
+            WHERE lbi.rn = 1
+            ORDER BY rp.index_name, rp.point_order
+            """,
+            params + [run_id],
+        ).fetchall()
+
+        grouped = {}
+        for index_name, recall, qps, line_style, point_order in rows:
+            if index_name in existing_names:
+                continue
+            grouped.setdefault(index_name, {"recalls": [], "qps": [], "style": line_style})
+            grouped[index_name]["recalls"].append(float(recall))
+            grouped[index_name]["qps"].append(float(qps))
+
+        injected = []
+        for index_name, data in grouped.items():
+            injected.append((index_name, tuple(data["recalls"]), tuple(data["qps"]), data["style"]))
+        return existing_runs + injected, [name for name, _, _, _ in injected]
+
+    def close(self):
+        self.conn.close()
+
+
 # --- Benchmarks ---
 
 
@@ -896,8 +1172,32 @@ def run_benchmark(args=None):
         parser.add_argument(
             "--save-results",
             type=str,
-            default="benchmark_results.pkl",
-            help="File to save results to",
+            default="",
+            help="Legacy pickle export path (optional)",
+        )
+        parser.add_argument(
+            "--results-db",
+            type=str,
+            default="benchmark_results.duckdb",
+            help="DuckDB file for benchmark history",
+        )
+        parser.add_argument(
+            "--cross-pollinate",
+            action="store_true",
+            default=True,
+            help="Merge compatible historical results into current plots (default: enabled)",
+        )
+        parser.add_argument(
+            "--no-cross-pollinate",
+            action="store_false",
+            dest="cross_pollinate",
+            help="Disable merging compatible historical results",
+        )
+        parser.add_argument(
+            "--run-tag",
+            type=str,
+            default="",
+            help="Optional label to tag this benchmark run in results DB",
         )
         args = parser.parse_args()
 
@@ -927,6 +1227,32 @@ def run_benchmark(args=None):
         gt = get_ground_truth(data, queries, K)
 
     print(f"Dataset: N={NUM_VECTORS}, Q={NUM_QUERIES}, Dim={DIM}")
+
+    run_meta = {
+        "run_tag": args.run_tag or None,
+        "dataset_name": dataset_name,
+        "dataset_path": os.path.abspath(args.dataset),
+        "dim": DIM,
+        "num_vectors": NUM_VECTORS,
+        "num_queries": NUM_QUERIES,
+        "k": K,
+        "rw_ratio": args.rw_ratio,
+        "thread_counts": THREAD_COUNTS,
+        "only_external": args.only_external,
+        "skip_recall": args.skip_recall,
+        "skip_throughput": args.skip_throughput,
+        "limit_rows": args.limit,
+    }
+
+    results_store = None
+    run_id = None
+    if args.results_db:
+        try:
+            results_store = BenchmarkResultsStore(args.results_db)
+            run_id = results_store.start_run(run_meta)
+            print(f"Results DB: {args.results_db} (run_id={run_id[:8]})")
+        except Exception as e:
+            print(f"{Fore.YELLOW}Results DB disabled: {e}{Style.RESET_ALL}")
 
     results_cache = {
         "recall_vs_qps": {"runs": [], "K": K, "DIM": DIM},
@@ -988,6 +1314,20 @@ def run_benchmark(args=None):
             ("IVFFlat Vanilla", recalls, qps, "s-")
         )
         plt.plot(recalls, qps, "s-", label="IVFFlat Vanilla")
+
+        if args.cross_pollinate and results_store and run_id:
+            merged_runs, injected = results_store.cross_pollinate_recall(
+                run_meta, run_id, results_cache["recall_vs_qps"]["runs"]
+            )
+            results_cache["recall_vs_qps"]["runs"] = merged_runs
+            for name, recalls, qps, style in merged_runs:
+                if name in {"HNSW Vanilla", "IVFFlat Vanilla"}:
+                    continue
+                plt.plot(recalls, qps, style, label=f"{name} (history)", alpha=0.6)
+            if injected:
+                print(
+                    f"Cross-pollinated recall from history: {', '.join(sorted(injected))}"
+                )
 
         plt.xlabel("Recall")
         plt.ylabel("QPS (log scale)")
@@ -1067,6 +1407,24 @@ def run_benchmark(args=None):
         results_cache["conflicts"] = conflict_results
         results_cache["external_names"] = [e[1] for e in externals]
 
+        if args.cross_pollinate and results_store and run_id:
+            merged_throughput, merged_conflicts, merged_external, injected = (
+                results_store.cross_pollinate_throughput(
+                    run_meta,
+                    run_id,
+                    results_cache["throughput"],
+                    results_cache["conflicts"],
+                    results_cache["external_names"],
+                )
+            )
+            results_cache["throughput"] = merged_throughput
+            results_cache["conflicts"] = merged_conflicts
+            results_cache["external_names"] = merged_external
+            if injected:
+                print(
+                    f"Cross-pollinated throughput from history: {', '.join(injected)}"
+                )
+
         # Plot 1: Throughput
         plt.figure(figsize=(8, 6))
         ax = plt.gca()
@@ -1079,8 +1437,8 @@ def run_benchmark(args=None):
                 except Exception as e:
                     print(f"Could not load icon {path}: {e}")
 
-        for name, res in throughput_results.items():
-            external_names = [e[1] for e in externals]
+        for name, res in results_cache["throughput"].items():
+            external_names = results_cache["external_names"]
 
             # Check for icon match
             icon_data = None
@@ -1100,6 +1458,8 @@ def run_benchmark(args=None):
                 img, zoom = icon_data
                 plt.plot(THREAD_COUNTS, res, "--", label=name, alpha=0.75, color=color)
                 for x, y in zip(THREAD_COUNTS, res):
+                    if np.isnan(y):
+                        continue
                     im = OffsetImage(img, zoom=zoom)
                     ab = AnnotationBbox(im, (x, y), xycoords="data", frameon=False)
                     ax.add_artist(ab)
@@ -1119,7 +1479,7 @@ def run_benchmark(args=None):
         # Plot 2: Conflict Rates (Optimistic only)
         plt.figure(figsize=(8, 6))
         has_conflicts = False
-        for name, conflicts in conflict_results.items():
+        for name, conflicts in results_cache["conflicts"].items():
             if "Opt" in name:
                 plt.plot(THREAD_COUNTS, conflicts, "x--", label=name)
                 has_conflicts = True
@@ -1133,6 +1493,19 @@ def run_benchmark(args=None):
             plt.tight_layout()
             plt.savefig("paper/plots/conflict_rate.svg", dpi=DPI)
             print("Saved paper/plots/conflict_rate.svg")
+
+    if results_store and run_id:
+        if results_cache["throughput"]:
+            results_store.save_throughput(
+                run_id,
+                results_cache["throughput"],
+                results_cache["conflicts"],
+                results_cache["external_names"],
+                THREAD_COUNTS,
+            )
+        if results_cache["recall_vs_qps"]["runs"]:
+            results_store.save_recall_runs(run_id, results_cache["recall_vs_qps"]["runs"])
+        results_store.close()
 
     if args.save_results:
         print(f"Saving results to {args.save_results}...")

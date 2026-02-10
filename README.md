@@ -81,12 +81,35 @@ uv run main.py --dataset data/sift-128-euclidean.hdf5 --skip-recall
 
 # Limit the dataset size for quick testing
 uv run main.py --dataset data/sift-128-euclidean.hdf5 --skip-recall --limit 1000
+
+# Persist results into DuckDB (cross-pollination is enabled by default)
+uv run main.py --dataset data/sift-128-euclidean.hdf5 --results-db benchmark_results.duckdb
+
+# Disable cross-pollination for an isolated run
+uv run main.py --dataset data/sift-128-euclidean.hdf5 --results-db benchmark_results.duckdb --no-cross-pollinate
+
+# Optional legacy pickle export
+uv run main.py --dataset data/sift-128-euclidean.hdf5 --save-results benchmark_results.pkl
 ```
 
 ### Generated Plots
 Plots are saved to the `paper/plots/` directory:
-*   `throughput_scaling.png`: Throughput vs. Thread Count.
-*   `recall_vs_qps.png`: Recall vs. QPS (if recall benchmark is run).
+*   `throughput_scaling.svg`: Throughput vs. Thread Count.
+*   `recall_vs_qps.svg`: Recall vs. QPS (if recall benchmark is run).
+*   `conflict_rate.svg`: Conflict rate vs. thread count (optimistic variants).
+
+## Latest Benchmarks
+
+Latest committed benchmark figures:
+
+### Throughput Scaling
+![Latest Throughput Scaling](paper/plots/throughput_scaling.svg)
+
+### Recall vs QPS
+![Latest Recall vs QPS](paper/plots/recall_vs_qps.svg)
+
+### Conflict Rate
+![Latest Conflict Rate](paper/plots/conflict_rate.svg)
 
 ## Testing
 

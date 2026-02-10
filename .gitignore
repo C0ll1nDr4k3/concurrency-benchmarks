@@ -1,10 +1,12 @@
 # Custom
 data/
 *.db
+*.duckdb
 *.db-journal
 *.db.lock
 *.pkl
 *.env
+*.wal
 
 
 .cache
