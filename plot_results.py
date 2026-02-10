@@ -1,46 +1,138 @@
-import pickle
-import matplotlib.pyplot as plt
-import matplotlib.image as mpimg
-from matplotlib.offsetbox import OffsetImage, AnnotationBbox
 import argparse
+import json
 import os
 
+import duckdb
+import matplotlib.image as mpimg
+import matplotlib.pyplot as plt
+from matplotlib.offsetbox import AnnotationBbox, OffsetImage
+
 try:
-    from nilvec.benchmark import ICON_MAPPING, COLOR_MAPPING
+    from nilvec.benchmark import COLOR_MAPPING, ICON_MAPPING
 except ImportError:
-    # Fallback if nilvec not installed in env running this script
     ICON_MAPPING = {}
     COLOR_MAPPING = {}
     print("Warning: nilvec not found, icons and colors might be missing")
 
 
-def plot_results(results_path, output_dir="paper/plots", dpi=1200):
-    if not os.path.exists(results_path):
-        print(f"Error: Results file {results_path} not found.")
-        return
+def _resolve_run_id(conn, run_id):
+    if run_id:
+        row = conn.execute(
+            "SELECT run_id FROM benchmark_runs WHERE run_id = ?", [run_id]
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"run_id not found: {run_id}")
+        return row[0]
 
-    with open(results_path, "rb") as f:
-        data = pickle.load(f)
+    row = conn.execute(
+        "SELECT run_id FROM benchmark_runs ORDER BY created_at DESC LIMIT 1"
+    ).fetchone()
+    if row is None:
+        raise ValueError("No runs found in benchmark database")
+    return row[0]
+
+
+def _load_plot_data(db_path, run_id=None):
+    if not os.path.exists(db_path):
+        raise FileNotFoundError(f"Results DB {db_path} not found")
+
+    conn = duckdb.connect(db_path, read_only=True)
+    selected_run_id = _resolve_run_id(conn, run_id)
+
+    run_meta = conn.execute(
+        """
+        SELECT rw_ratio, thread_counts_json, k, dim
+        FROM benchmark_runs
+        WHERE run_id = ?
+        """,
+        [selected_run_id],
+    ).fetchone()
+    if run_meta is None:
+        raise ValueError(f"No benchmark_runs entry for run_id={selected_run_id}")
+
+    rw_ratio, thread_counts_json, k, dim = run_meta
+    thread_counts = json.loads(thread_counts_json)
+
+    throughput_rows = conn.execute(
+        """
+        SELECT index_name, thread_count, throughput, conflict_rate, is_external
+        FROM throughput_points
+        WHERE run_id = ?
+        ORDER BY index_name, thread_count
+        """,
+        [selected_run_id],
+    ).fetchall()
+
+    throughput = {}
+    conflicts = {}
+    external_names = set()
+    thread_pos = {int(t): i for i, t in enumerate(thread_counts)}
+    for index_name, thread_count, throughput_val, conflict_rate, is_external in throughput_rows:
+        if index_name not in throughput:
+            throughput[index_name] = [float("nan")] * len(thread_counts)
+            conflicts[index_name] = [float("nan")] * len(thread_counts)
+        i = thread_pos.get(int(thread_count))
+        if i is None:
+            continue
+        throughput[index_name][i] = float(throughput_val)
+        conflicts[index_name][i] = float(conflict_rate)
+        if is_external:
+            external_names.add(index_name)
+
+    recall_rows = conn.execute(
+        """
+        SELECT index_name, recall, qps, line_style
+        FROM recall_points
+        WHERE run_id = ?
+        ORDER BY index_name, point_order
+        """,
+        [selected_run_id],
+    ).fetchall()
+    recall_grouped = {}
+    for index_name, recall, qps, line_style in recall_rows:
+        recall_grouped.setdefault(
+            index_name, {"recalls": [], "qps": [], "style": line_style}
+        )
+        recall_grouped[index_name]["recalls"].append(float(recall))
+        recall_grouped[index_name]["qps"].append(float(qps))
+
+    recall_runs = [
+        (name, vals["recalls"], vals["qps"], vals["style"])
+        for name, vals in recall_grouped.items()
+    ]
+
+    conn.close()
+    return {
+        "run_id": selected_run_id,
+        "rw_ratio": float(rw_ratio),
+        "thread_counts": thread_counts,
+        "k": int(k),
+        "dim": int(dim),
+        "throughput": throughput,
+        "conflicts": conflicts,
+        "external_names": sorted(external_names),
+        "recall_runs": recall_runs,
+    }
+
+
+def plot_results(results_db, output_dir="paper/plots", dpi=1200, run_id=None):
+    data = _load_plot_data(results_db, run_id=run_id)
 
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
     # --- Plot 1: Recall vs QPS ---
-    if "recall_vs_qps" in data and data["recall_vs_qps"]:
+    if data["recall_runs"]:
         print("Plotting Recall vs QPS...")
         plt.figure(figsize=(10, 6))
 
-        recall_data = data["recall_vs_qps"]
-        K = recall_data.get("K", 10)
-        DIM = recall_data.get("DIM", 128)
-
-        for name, recalls, qps, style in recall_data.get("runs", []):
+        for name, recalls, qps, style in data["recall_runs"]:
             plt.plot(recalls, qps, style, label=name)
 
         plt.xlabel("Recall")
         plt.ylabel("QPS (log scale)")
         plt.yscale("log")
-        plt.title(f"Recall vs QPS (K={K}, Dim={DIM})")
+        plt.title(f"Recall vs QPS (K={data['k']}, Dim={data['dim']})")
         plt.legend()
         plt.grid(True)
         out_path = os.path.join(output_dir, "recall_vs_qps.svg")
@@ -49,15 +141,14 @@ def plot_results(results_path, output_dir="paper/plots", dpi=1200):
         plt.close()
 
     # --- Plot 2: Throughput vs Threads ---
-    if "throughput" in data and data["throughput"]:
+    if data["throughput"]:
         print("Plotting Throughput vs Threads...")
         plt.figure(figsize=(8, 6))
         ax = plt.gca()
 
-        throughput_results = data["throughput"]
         thread_counts = data["thread_counts"]
-        rw_ratio = data.get("rw_ratio", 0.1)
-        external_names = data.get("external_names", [])
+        rw_ratio = data["rw_ratio"]
+        external_names = data["external_names"]
 
         loaded_icons = {}
         for key, (path, zoom) in ICON_MAPPING.items():
@@ -67,15 +158,13 @@ def plot_results(results_path, output_dir="paper/plots", dpi=1200):
                 except Exception as e:
                     print(f"Could not load icon {path}: {e}")
 
-        for name, res in throughput_results.items():
-            # Check for icon match
+        for name, res in data["throughput"].items():
             icon_data = None
             for key, (img, zoom) in loaded_icons.items():
                 if key in name:
                     icon_data = (img, zoom)
                     break
 
-            # Check for color match
             color = None
             for key, c in COLOR_MAPPING.items():
                 if key in name:
@@ -105,16 +194,13 @@ def plot_results(results_path, output_dir="paper/plots", dpi=1200):
         plt.close()
 
     # --- Plot 3: Conflict Rates ---
-    if "conflicts" in data and data["conflicts"]:
+    if data["conflicts"]:
         print("Plotting Conflict Rates...")
         plt.figure(figsize=(8, 6))
-        conflict_results = data["conflicts"]
-        thread_counts = data["thread_counts"]
-
         has_conflicts = False
-        for name, conflicts in conflict_results.items():
+        for name, conflicts in data["conflicts"].items():
             if "Opt" in name:
-                plt.plot(thread_counts, conflicts, "x--", label=name)
+                plt.plot(data["thread_counts"], conflicts, "x--", label=name)
                 has_conflicts = True
 
         if has_conflicts:
@@ -129,21 +215,25 @@ def plot_results(results_path, output_dir="paper/plots", dpi=1200):
             print(f"Saved {out_path}")
         plt.close()
 
+    print(f"Plotted run_id={data['run_id']}")
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Plot benchmark results from cached file"
-    )
+    parser = argparse.ArgumentParser(description="Plot benchmark results from DuckDB")
     parser.add_argument(
-        "--results",
+        "--results-db",
         type=str,
-        default="benchmark_results.pkl",
-        help="Path to pickle file",
+        default="benchmark_results.duckdb",
+        help="Path to benchmark DuckDB file",
     )
     parser.add_argument(
-        "--out", type=str, default="paper/plots", help="Output directory"
+        "--run-id",
+        type=str,
+        default="",
+        help="Optional run_id to plot (default: latest run)",
     )
+    parser.add_argument("--out", type=str, default="paper/plots", help="Output directory")
     parser.add_argument("--dpi", type=int, default=1200, help="DPI for plots")
 
     args = parser.parse_args()
-    plot_results(args.results, args.out, args.dpi)
+    plot_results(args.results_db, args.out, args.dpi, run_id=args.run_id or None)

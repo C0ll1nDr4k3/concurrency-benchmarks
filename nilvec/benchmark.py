@@ -92,6 +92,8 @@ ICON_MAPPING = {
     "FAISS": ("paper/imgs/meta.png", 0.005),
     "USearch": ("paper/imgs/usearch.png", 0.015),
     "Weaviate": ("paper/imgs/weaviate.png", 0.015),
+    "Qdrant": ("paper/imgs/qdrant.png", 0.005),
+    "Redis": ("paper/imgs/redis.png", 0.02),
 }
 
 # Color mapping: "Substring": "color"
