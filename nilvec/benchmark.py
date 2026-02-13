@@ -1061,6 +1061,7 @@ def benchmark_recall_vs_qps(
         index_args = []
 
     print(f"\nBenchmarking Recall vs QPS: {index_name}")
+    recall_start_time = time.time()
 
     # helper to instantiate properly
     if "IVF" in index_name:
@@ -1104,6 +1105,11 @@ def benchmark_recall_vs_qps(
         print(f"  Params: {params} -> Recall: {recall:.4f}, QPS: {qps:.0f}")
         results.append((recall, qps))
 
+    recall_elapsed = time.time() - recall_start_time
+    print(
+        f"  {Fore.WHITE}Elapsed time for {Style.BRIGHT}{index_name}{Style.RESET_ALL}"
+        f"{Fore.WHITE}: {recall_elapsed:.2f}s{Style.RESET_ALL}"
+    )
     return results
 
 
@@ -1118,6 +1124,7 @@ def benchmark_throughput_vs_threads(
         index_args = []
 
     print(format_benchmark_header(index_name, rw_ratio))
+    index_start_time = time.time()
     results = []
     conflict_rates = []
 
@@ -1255,87 +1262,37 @@ def benchmark_throughput_vs_threads(
         if hasattr(index, "close"):
             index.close()
 
+    index_elapsed = time.time() - index_start_time
+    print(
+        f"  {Fore.WHITE}Elapsed time for {Style.BRIGHT}{index_name}{Style.RESET_ALL}"
+        f"{Fore.WHITE}: {index_elapsed:.2f}s{Style.RESET_ALL}"
+    )
     return results, conflict_rates
 
 
 # --- Main ---
 
 
-def run_benchmark(args=None):
-    if args is None:
-        parser = argparse.ArgumentParser()
-        parser.add_argument("--skip-recall", action="store_true")
-        parser.add_argument("--skip-throughput", action="store_true")
-        parser.add_argument(
-            "--dataset",
-            type=str,
-            default="sift-128-euclidean.hdf5",
-            help="Path to HDF5 dataset",
-        )
-        parser.add_argument(
-            "--rw-ratio",
-            type=float,
-            default=RW_RATIO,
-            help="Read/Write ratio (0.0=Read, 1.0=Write)",
-        )
-        parser.add_argument(
-            "--limit",
-            type=int,
-            default=0,
-            help="Limit number of vectors (0 = no limit)",
-        )
-        parser.add_argument(
-            "--only-external", action="store_true", help="Run only external benchmarks"
-        )
-        parser.add_argument(
-            "--save-results",
-            type=str,
-            default="",
-            help="Legacy pickle export path (optional)",
-        )
-        parser.add_argument(
-            "--results-db",
-            type=str,
-            default="benchmark_results.duckdb",
-            help="DuckDB file for benchmark history",
-        )
-        parser.add_argument(
-            "--cross-pollinate",
-            action="store_true",
-            default=True,
-            help="Merge compatible historical results into current plots (default: enabled)",
-        )
-        parser.add_argument(
-            "--no-cross-pollinate",
-            action="store_false",
-            dest="cross_pollinate",
-            help="Disable merging compatible historical results",
-        )
-        parser.add_argument(
-            "--run-tag",
-            type=str,
-            default="",
-            help="Optional label to tag this benchmark run in results DB",
-        )
-        parser.add_argument(
-            "--auto-start-redis",
-            action="store_true",
-            default=True,
-            help="Attempt to auto-start redis/redis-stack via Docker if REDIS_URL is unreachable (default: enabled)",
-        )
-        parser.add_argument(
-            "--no-auto-start-redis",
-            action="store_false",
-            dest="auto_start_redis",
-            help="Disable Docker auto-start for Redis benchmark preflight",
-        )
-        args = parser.parse_args()
+def _format_elapsed(seconds):
+    """Format elapsed seconds as a human-readable string."""
+    if seconds < 60:
+        return f"{seconds:.2f}s"
+    minutes, secs = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{int(minutes)}m {secs:.1f}s"
+    hours, minutes = divmod(int(minutes), 60)
+    return f"{int(hours)}h {int(minutes)}m {secs:.0f}s"
+
+
+def _run_single_dataset(args, dataset_path):
+    """Run benchmark for a single dataset. Returns elapsed time in seconds."""
+    dataset_start_time = time.time()
 
     # Load Data
     # Check if we likely have a valid dataset to load
-    dataset_name = os.path.splitext(os.path.basename(args.dataset))[0]
-    if args.dataset and (os.path.exists(args.dataset) or dataset_name in DATASETS):
-        data, queries, gt = load_dataset(args.dataset, args.limit)
+    dataset_name = os.path.splitext(os.path.basename(dataset_path))[0]
+    if dataset_path and (os.path.exists(dataset_path) or dataset_name in DATASETS):
+        data, queries, gt = load_dataset(dataset_path, args.limit)
 
         if args.limit > 0:
             print(f"Limiting dataset to first {args.limit} vectors...")
@@ -1368,7 +1325,7 @@ def run_benchmark(args=None):
     run_meta = {
         "run_tag": args.run_tag or None,
         "dataset_name": dataset_name,
-        "dataset_path": os.path.abspath(args.dataset),
+        "dataset_path": os.path.abspath(dataset_path),
         "dim": DIM,
         "num_vectors": NUM_VECTORS,
         "num_queries": NUM_QUERIES,
@@ -1662,6 +1619,127 @@ def run_benchmark(args=None):
         print(f"Saving results to {args.save_results}...")
         with open(args.save_results, "wb") as f:
             pickle.dump(results_cache, f)
+
+    dataset_elapsed = time.time() - dataset_start_time
+    print(
+        f"\n{Style.BRIGHT}{Fore.GREEN}Dataset '{dataset_name}' completed in "
+        f"{_format_elapsed(dataset_elapsed)}{Style.RESET_ALL}"
+    )
+    return dataset_elapsed
+
+
+def run_benchmark(args=None):
+    if args is None:
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--skip-recall", action="store_true")
+        parser.add_argument("--skip-throughput", action="store_true")
+        parser.add_argument(
+            "--dataset",
+            type=str,
+            default="sift-128-euclidean.hdf5",
+            help="Path to HDF5 dataset",
+        )
+        parser.add_argument(
+            "--all",
+            action="store_true",
+            help="Run benchmark on all available datasets (overrides --dataset)",
+        )
+        parser.add_argument(
+            "--rw-ratio",
+            type=float,
+            default=RW_RATIO,
+            help="Read/Write ratio (0.0=Read, 1.0=Write)",
+        )
+        parser.add_argument(
+            "--limit",
+            type=int,
+            default=0,
+            help="Limit number of vectors (0 = no limit)",
+        )
+        parser.add_argument(
+            "--only-external", action="store_true", help="Run only external benchmarks"
+        )
+        parser.add_argument(
+            "--save-results",
+            type=str,
+            default="",
+            help="Legacy pickle export path (optional)",
+        )
+        parser.add_argument(
+            "--results-db",
+            type=str,
+            default="benchmark_results.duckdb",
+            help="DuckDB file for benchmark history",
+        )
+        parser.add_argument(
+            "--cross-pollinate",
+            action="store_true",
+            default=True,
+            help="Merge compatible historical results into current plots (default: enabled)",
+        )
+        parser.add_argument(
+            "--no-cross-pollinate",
+            action="store_false",
+            dest="cross_pollinate",
+            help="Disable merging compatible historical results",
+        )
+        parser.add_argument(
+            "--run-tag",
+            type=str,
+            default="",
+            help="Optional label to tag this benchmark run in results DB",
+        )
+        parser.add_argument(
+            "--auto-start-redis",
+            action="store_true",
+            default=True,
+            help="Attempt to auto-start redis/redis-stack via Docker if REDIS_URL is unreachable (default: enabled)",
+        )
+        parser.add_argument(
+            "--no-auto-start-redis",
+            action="store_false",
+            dest="auto_start_redis",
+            help="Disable Docker auto-start for Redis benchmark preflight",
+        )
+        args = parser.parse_args()
+
+    suite_start_time = time.time()
+
+    if getattr(args, "all", False):
+        dataset_names = list(DATASETS.keys())
+        print(
+            f"\n{Style.BRIGHT}{Fore.CYAN}=== Full Benchmark Suite ==={Style.RESET_ALL}"
+        )
+        print(f"Running {len(dataset_names)} datasets: {', '.join(dataset_names)}\n")
+
+        dataset_timings = {}
+        for i, ds_name in enumerate(dataset_names, 1):
+            ds_path = f"{ds_name}.hdf5"
+            print(
+                f"\n{Style.BRIGHT}{Fore.CYAN}"
+                f"--- [{i}/{len(dataset_names)}] Dataset: {ds_name} ---"
+                f"{Style.RESET_ALL}"
+            )
+            elapsed = _run_single_dataset(args, ds_path)
+            dataset_timings[ds_name] = elapsed
+
+        suite_elapsed = time.time() - suite_start_time
+        print(
+            f"\n{Style.BRIGHT}{Fore.CYAN}=== Full Suite Summary ==={Style.RESET_ALL}"
+        )
+        for ds_name, elapsed in dataset_timings.items():
+            print(f"  {ds_name}: {_format_elapsed(elapsed)}")
+        print(
+            f"\n{Style.BRIGHT}{Fore.GREEN}Total suite time: "
+            f"{_format_elapsed(suite_elapsed)}{Style.RESET_ALL}"
+        )
+    else:
+        _run_single_dataset(args, args.dataset)
+        suite_elapsed = time.time() - suite_start_time
+        print(
+            f"\n{Style.BRIGHT}{Fore.GREEN}Total elapsed time: "
+            f"{_format_elapsed(suite_elapsed)}{Style.RESET_ALL}"
+        )
 
 
 if __name__ == "__main__":

@@ -111,9 +111,50 @@ Incidentaly, the lower a dataset's throughput, the higher is cluster density.
 Qdrant was omitted from the plotted throughput comparison because its performance was substantially lower and did not scale with thread count in this workload (2 threads: 561 ops/s, 4: 537 ops/s, 8: 571 ops/s, 16: 530 ops/s).
 
 #figure(
-  image("plots/throughput_scaling.svg", width: 80%),
+  grid(
+    columns: 2,
+    gutter: 12pt,
+    figure(
+      image("plots/throughput_scaling.svg", width: 100%),
+      caption: [SIFT-128],
+    ),
+    figure(
+      image("plots/throughput_scaling.svg", width: 100%),
+      caption: [Fashion-MNIST-784],
+    ),
+    figure(
+      image("plots/throughput_scaling.svg", width: 100%),
+      caption: [GloVe-100],
+    ),
+    figure(
+      image("plots/throughput_scaling.svg", width: 100%),
+      caption: [GloVe-25],
+    ),
+  ),
   caption: [
-    Throughput scaling with increasing numbers of threads for each index type.
+    Throughput scaling with increasing numbers of threads for each index type, across all benchmark datasets.
+  ],
+)
+
+#figure(
+  grid(
+    columns: 2,
+    gutter: 12pt,
+    figure(
+      image("plots/throughput_scaling.svg", width: 100%),
+      caption: [GIST-960],
+    ),
+    figure(
+      image("plots/throughput_scaling.svg", width: 100%),
+      caption: [NYTimes-256],
+    ),
+    figure(
+      image("plots/throughput_scaling.svg", width: 100%),
+      caption: [MNIST-784],
+    ),
+  ),
+  caption: [
+    Throughput scaling with increasing numbers of threads for each index type, across all benchmark datasets.
   ],
 )
 
