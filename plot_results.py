@@ -41,7 +41,7 @@ def _load_plot_data(db_path, run_id=None):
 
     run_meta = conn.execute(
         """
-        SELECT rw_ratio, thread_counts_json, k, dim
+        SELECT rw_ratio, thread_counts_json, k, dim, dataset_name, num_vectors, limit_rows
         FROM benchmark_runs
         WHERE run_id = ?
         """,
@@ -50,7 +50,7 @@ def _load_plot_data(db_path, run_id=None):
     if run_meta is None:
         raise ValueError(f"No benchmark_runs entry for run_id={selected_run_id}")
 
-    rw_ratio, thread_counts_json, k, dim = run_meta
+    rw_ratio, thread_counts_json, k, dim, dataset_name, num_vectors, limit_rows = run_meta
     thread_counts = json.loads(thread_counts_json)
 
     throughput_rows = conn.execute(
@@ -102,6 +102,7 @@ def _load_plot_data(db_path, run_id=None):
     ]
 
     conn.close()
+    _plot_limit = int(limit_rows) if limit_rows and int(limit_rows) > 0 else int(num_vectors)
     return {
         "run_id": selected_run_id,
         "rw_ratio": float(rw_ratio),
@@ -112,11 +113,17 @@ def _load_plot_data(db_path, run_id=None):
         "conflicts": conflicts,
         "external_names": sorted(external_names),
         "recall_runs": recall_runs,
+        "dataset_name": dataset_name or "unknown",
+        "plot_limit": _plot_limit,
     }
 
 
 def plot_results(results_db, output_dir="paper/plots", dpi=1200, run_id=None):
     data = _load_plot_data(results_db, run_id=run_id)
+
+    # Build per-dataset subfolder: {output_dir}/{dataset}_{limit}
+    dataset_subdir = f"{data['dataset_name']}_{data['plot_limit']}"
+    output_dir = os.path.join(output_dir, dataset_subdir)
 
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)

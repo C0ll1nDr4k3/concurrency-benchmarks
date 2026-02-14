@@ -1358,6 +1358,13 @@ def run_benchmark(args=None):
 
     print(f"Dataset: N={NUM_VECTORS}, Q={NUM_QUERIES}, Dim={DIM}")
 
+    # Build per-dataset plot directory: paper/plots/{dataset}_{limit}
+    _plot_limit = args.limit if args.limit > 0 else NUM_VECTORS
+    plot_dir = os.path.join("paper", "plots", f"{dataset_name}_{_plot_limit}")
+    if not os.path.exists(plot_dir):
+        os.makedirs(plot_dir, exist_ok=True)
+    print(f"Plot output directory: {plot_dir}")
+
     run_meta = {
         "run_tag": args.run_tag or None,
         "dataset_name": dataset_name,
@@ -1465,8 +1472,9 @@ def run_benchmark(args=None):
         plt.title(f"Recall vs QPS (K={K}, Dim={DIM})")
         plt.legend()
         plt.grid(True)
-        plt.savefig("paper/plots/recall_vs_qps.svg", dpi=DPI)
-        print("Saved paper/plots/recall_vs_qps.svg")
+        recall_path = os.path.join(plot_dir, "recall_vs_qps.svg")
+        plt.savefig(recall_path, dpi=DPI)
+        print(f"Saved {recall_path}")
 
     # --- throughput vs Threads ---
     if not args.skip_throughput:
@@ -1614,8 +1622,9 @@ def run_benchmark(args=None):
         plt.legend()
         plt.grid(True)
         plt.tight_layout()
-        plt.savefig("paper/plots/throughput_scaling.svg", dpi=DPI)
-        print("Saved plots/throughput_scaling.svg")
+        throughput_path = os.path.join(plot_dir, "throughput_scaling.svg")
+        plt.savefig(throughput_path, dpi=DPI)
+        print(f"Saved {throughput_path}")
 
         # Plot 2: Conflict Rates (Optimistic only)
         plt.figure(figsize=(8, 6))
@@ -1632,8 +1641,9 @@ def run_benchmark(args=None):
             plt.legend()
             plt.grid(True)
             plt.tight_layout()
-            plt.savefig("paper/plots/conflict_rate.svg", dpi=DPI)
-            print("Saved paper/plots/conflict_rate.svg")
+            conflict_path = os.path.join(plot_dir, "conflict_rate.svg")
+            plt.savefig(conflict_path, dpi=DPI)
+            print(f"Saved {conflict_path}")
 
     if results_store and run_id:
         if results_cache["throughput"]:
@@ -1655,6 +1665,5 @@ def run_benchmark(args=None):
 
 
 if __name__ == "__main__":
-    if not os.path.exists("paper/plots"):
-        os.makedirs("paper/plots", exist_ok=True)
+    # The per-dataset plot directory is created inside run_benchmark()
     run_benchmark()
