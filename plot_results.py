@@ -102,7 +102,7 @@ def _load_plot_data(db_path, run_id=None):
     ]
 
     conn.close()
-    _plot_limit = int(limit_rows) if limit_rows and int(limit_rows) > 0 else int(num_vectors)
+    _plot_limit = int(limit_rows) if limit_rows and int(limit_rows) > 0 else "full"
     return {
         "run_id": selected_run_id,
         "rw_ratio": float(rw_ratio),

@@ -1501,7 +1501,7 @@ def _run_single_dataset(args, dataset_path):
     print(f"Dataset: N={NUM_VECTORS}, Q={NUM_QUERIES}, Dim={DIM}")
 
     # Build per-dataset plot directory: paper/plots/{dataset}_{limit}
-    _plot_limit = args.limit if args.limit > 0 else NUM_VECTORS
+    _plot_limit = args.limit if args.limit > 0 else "full"
     plot_dir = os.path.join("paper", "plots", f"{dataset_name}_{_plot_limit}")
     if not os.path.exists(plot_dir):
         os.makedirs(plot_dir, exist_ok=True)

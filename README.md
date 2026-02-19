@@ -189,16 +189,24 @@ uv run python -m nilvec.benchmark --mode both --all
 Latest committed benchmark figures:
 
 ### Throughput Scaling
-![Latest Throughput Scaling](paper/plots/throughput_scaling.svg)
-Throughput vs. Thread Count.
+
+#### SIFT-128 Euclidean (full)
+![Throughput Scaling — SIFT-128 (full)](paper/plots/sift-128-euclidean_full/throughput_scaling.svg)
+
+#### Fashion-MNIST-784 Euclidean (full)
+![Throughput Scaling — Fashion-MNIST-784 (full)](paper/plots/fashion-mnist-784-euclidean_full/throughput_scaling.svg)
 
 ### Recall vs QPS
 ![Latest Recall vs QPS](paper/plots/recall_vs_qps.svg)
 Recall vs. QPS.
 
 ### Conflict Rate
-![Latest Conflict Rate](paper/plots/conflict_rate.svg)
-Conflict rate vs. thread count (optimistic variants).
+
+#### SIFT-128 Euclidean (full)
+![Conflict Rate — SIFT-128 (full)](paper/plots/sift-128-euclidean_full/conflict_rate.svg)
+
+#### Fashion-MNIST-784 Euclidean (full)
+![Conflict Rate — Fashion-MNIST-784 (full)](paper/plots/fashion-mnist-784-euclidean_full/conflict_rate.svg)
 
 ## Testing
 
