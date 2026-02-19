@@ -147,17 +147,20 @@ class FaissHNSW:
         self.index.hnsw.efConstruction = ef_construction
         self.M = M
         self.ef_construction = ef_construction
+        self._lock = threading.Lock()
 
     def insert(self, vec):
         # Faiss expects numpy arrays
         v = np.array([vec], dtype=np.float32)
-        self.index.add(v)
+        with self._lock:
+            self.index.add(v)
 
     def search(self, query, k, ef=None):
-        if ef is not None:
-            self.index.hnsw.efSearch = ef
         v = np.array([query], dtype=np.float32)
-        D, I = self.index.search(v, k)
+        with self._lock:
+            if ef is not None:
+                self.index.hnsw.efSearch = ef
+            D, I = self.index.search(v, k)
         return type(
             "Result", (object,), {"ids": I[0].tolist(), "distances": D[0].tolist()}
         )()
@@ -177,6 +180,7 @@ class FaissIVF:
         self.index = faiss.IndexIVFFlat(quantizer, dim, nlist, faiss.METRIC_L2)
         self.index.nprobe = nprobe
         self.nlist = nlist
+        self._lock = threading.Lock()
 
     def train(self, data):
         # Faiss training needs numpy
@@ -185,17 +189,20 @@ class FaissIVF:
 
     def insert(self, vec):
         v = np.array([vec], dtype=np.float32)
-        self.index.add(v)
+        with self._lock:
+            self.index.add(v)
 
     def search(self, query, k, ef=None):
         v = np.array([query], dtype=np.float32)
-        D, I = self.index.search(v, k)
+        with self._lock:
+            D, I = self.index.search(v, k)
         return type(
             "Result", (object,), {"ids": I[0].tolist(), "distances": D[0].tolist()}
         )()
 
     def set_nprobe(self, n):
-        self.index.nprobe = n
+        with self._lock:
+            self.index.nprobe = n
 
 
 class USearchIndex:
@@ -1050,6 +1057,73 @@ class BenchmarkResultsStore:
 # --- Benchmarks ---
 
 
+# --- Multiprocessing Workers ---
+
+
+def _mp_init_index(index_cls, index_args, dim, train_data):
+    """Initialize index in worker process"""
+    if "IVF" in index_cls.__name__:
+        index = index_cls(dim, *index_args)
+        index.train(train_data)
+    else:
+        index = index_cls(dim, *index_args)
+    return index
+
+
+def _mp_worker_insert(args):
+    """Insert worker for multiprocessing - runs in separate process"""
+    index_cls, index_args, dim, data_chunk, train_data = args
+
+    # Initialize index in this process
+    index = _mp_init_index(index_cls, index_args, dim, train_data)
+
+    # Pre-load half the data (matching threading benchmark)
+    half = len(data_chunk) // 2
+    for vec in data_chunk[:half]:
+        index.insert(vec)
+
+    # Time the remaining inserts
+    start = time.time()
+    ops_count = 0
+    for vec in data_chunk[half:]:
+        index.insert(vec)
+        ops_count += 1
+    duration = time.time() - start
+
+    # Cleanup
+    if hasattr(index, "close"):
+        index.close()
+
+    return ops_count, duration
+
+
+def _mp_worker_search(args):
+    """Search worker for multiprocessing - runs in separate process"""
+    index_cls, index_args, dim, preload_data, queries, k, train_data = args
+
+    # Initialize index in this process
+    index = _mp_init_index(index_cls, index_args, dim, train_data)
+
+    # Pre-load data
+    for vec in preload_data:
+        index.insert(vec)
+
+    # Time searches (5 iterations to match threading benchmark)
+    start = time.time()
+    total_ops = 0
+    for _ in range(5):
+        for q in queries:
+            index.search(q, k)
+            total_ops += 1
+    duration = time.time() - start
+
+    # Cleanup
+    if hasattr(index, "close"):
+        index.close()
+
+    return total_ops, duration
+
+
 def benchmark_recall_vs_qps(
     index_cls, index_name, data, queries, gt, k, index_args=None, search_params=None
 ):
@@ -1108,7 +1182,7 @@ def benchmark_recall_vs_qps(
     recall_elapsed = time.time() - recall_start_time
     print(
         f"  {Fore.WHITE}Elapsed time for {Style.BRIGHT}{index_name}{Style.RESET_ALL}"
-        f"{Fore.WHITE}: {recall_elapsed:.2f}s{Style.RESET_ALL}"
+        f"{Fore.WHITE}: {_format_elapsed(recall_elapsed)}{Style.RESET_ALL}"
     )
     return results
 
@@ -1265,7 +1339,118 @@ def benchmark_throughput_vs_threads(
     index_elapsed = time.time() - index_start_time
     print(
         f"  {Fore.WHITE}Elapsed time for {Style.BRIGHT}{index_name}{Style.RESET_ALL}"
-        f"{Fore.WHITE}: {index_elapsed:.2f}s{Style.RESET_ALL}"
+        f"{Fore.WHITE}: {_format_elapsed(index_elapsed)}{Style.RESET_ALL}"
+    )
+    return results, conflict_rates
+
+
+def benchmark_throughput_vs_processes(
+    index_cls, index_name, data, queries, k, index_args=None, rw_ratio=0.5
+):
+    """
+    Run Throughput vs Processes benchmark with configurable R/W split.
+    Each process creates its own independent index instance.
+    rw_ratio: Fraction of processes performing inserts (0.0 = Read Only, 1.0 = Write Only)
+    """
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+
+    if index_args is None:
+        index_args = []
+
+    print(format_benchmark_header(index_name + " (MP)", rw_ratio))
+    index_start_time = time.time()
+    results = []
+    conflict_rates = []  # No conflict tracking in multiprocessing mode
+
+    # Pre-compute training data if needed
+    train_data = data if "IVF" in index_name else None
+
+    for num_processes in THREAD_COUNTS:
+        # Calculate process split (same logic as threading)
+        num_insert_procs = int(num_processes * rw_ratio)
+        if rw_ratio > 0.0 and rw_ratio < 1.0:
+            if num_insert_procs == 0 and num_processes > 0:
+                num_insert_procs = 1
+            elif num_insert_procs == num_processes and num_processes > 1:
+                num_insert_procs -= 1
+        elif rw_ratio == 0.0:
+            num_insert_procs = 0
+        elif rw_ratio == 1.0:
+            num_insert_procs = num_processes
+
+        num_search_procs = num_processes - num_insert_procs
+
+        # Split data for insert workers
+        initial_size = len(data) // 2
+        remaining_data = data[initial_size:]
+        preload_data = data[:initial_size]
+
+        tasks = []
+
+        # Create insert tasks
+        if num_insert_procs > 0:
+            chunk_size = len(remaining_data) // num_insert_procs
+            for i in range(num_insert_procs):
+                start_idx = i * chunk_size
+                end_idx = (
+                    (i + 1) * chunk_size
+                    if i < num_insert_procs - 1
+                    else len(remaining_data)
+                )
+                chunk = remaining_data[start_idx:end_idx]
+                tasks.append(
+                    (_mp_worker_insert, (index_cls, index_args, DIM, chunk, train_data))
+                )
+
+        # Create search tasks
+        if num_search_procs > 0:
+            for _ in range(num_search_procs):
+                tasks.append(
+                    (
+                        _mp_worker_search,
+                        (index_cls, index_args, DIM, preload_data, queries, k, train_data),
+                    )
+                )
+
+        # Execute in parallel using ProcessPoolExecutor
+        start_time = time.time()
+        total_ops = 0
+
+        try:
+            with ProcessPoolExecutor(max_workers=num_processes) as executor:
+                # Submit all tasks
+                futures = [executor.submit(func, args) for func, args in tasks]
+
+                # Collect results as they complete
+                for future in as_completed(futures):
+                    try:
+                        ops, duration = future.result()
+                        total_ops += ops
+                    except Exception as e:
+                        print(f"\nProcess worker failed: {e}")
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        return None, None
+
+        except KeyboardInterrupt:
+            print(f"\nSkipping {index_name}: Operation has been terminated")
+            return None, None
+
+        duration = time.time() - start_time
+        throughput = total_ops / duration if duration > 0 else 0
+
+        prev = results[-1] if results else None
+        print(
+            format_throughput_line(
+                num_processes, num_insert_procs, num_search_procs, throughput, prev
+            )
+        )
+        results.append(throughput)
+        conflict_rates.append(0)  # No conflict tracking in multiprocessing
+
+    index_elapsed = time.time() - index_start_time
+    print(
+        f"  {Fore.WHITE}Elapsed time for {Style.BRIGHT}{index_name} (MP){Style.RESET_ALL}"
+        f"{Fore.WHITE}: {_format_elapsed(index_elapsed)}{Style.RESET_ALL}"
     )
     return results, conflict_rates
 
@@ -1453,22 +1638,7 @@ def _run_single_dataset(args, dataset_path):
         throughput_results = {}
         conflict_results = {}
 
-        # Internal Indexes
-        for cls, name, iargs in indexes:
-            if args.only_external:
-                continue
-            try:
-                res, conflicts = benchmark_throughput_vs_threads(
-                    cls, name, data, queries, K, iargs, rw_ratio=args.rw_ratio
-                )
-                if res is None:
-                    continue
-                throughput_results[name] = res
-                conflict_results[name] = conflicts
-            except Exception as e:
-                print(f"Skipping {name}: {e}")
-
-        # External Indexes
+        # External Indexes definition (used by both modes)
         externals = []
         if faiss:
             externals.append((FaissHNSW, "FAISS HNSW", hnsw_args))
@@ -1495,18 +1665,60 @@ def _run_single_dataset(args, dataset_path):
                 "  (use --no-auto-start-redis to disable Docker auto-start)"
             )
 
-        for cls, name, iargs in externals:
-            try:
-                res, conflicts = benchmark_throughput_vs_threads(
-                    cls, name, data, queries, K, iargs, rw_ratio=args.rw_ratio
-                )
-                if res is None:
+        # === Threading Mode ===
+        if args.mode in ("threading", "both"):
+            if args.mode == "both":
+                print(f"\n{Fore.CYAN}--- Threading Mode ---{Style.RESET_ALL}")
+
+            # External Indexes (run first — these sometimes crash)
+            for cls, name, iargs in externals:
+                try:
+                    res, conflicts = benchmark_throughput_vs_threads(
+                        cls, name, data, queries, K, iargs, rw_ratio=args.rw_ratio
+                    )
+                    if res is None:
+                        continue
+                    throughput_results[name] = res
+                    # External libs don't report conflict rates usually, but we capture 0s
+                    conflict_results[name] = conflicts
+                except Exception as e:
+                    print(f"Skipping {name}: {e}")
+
+            # Internal Indexes
+            for cls, name, iargs in indexes:
+                if args.only_external:
                     continue
-                throughput_results[name] = res
-                # External libs don't report conflict rates usually, but we capture 0s
-                conflict_results[name] = conflicts
-            except Exception as e:
-                print(f"Skipping {name}: {e}")
+                try:
+                    res, conflicts = benchmark_throughput_vs_threads(
+                        cls, name, data, queries, K, iargs, rw_ratio=args.rw_ratio
+                    )
+                    if res is None:
+                        continue
+                    throughput_results[name] = res
+                    conflict_results[name] = conflicts
+                except Exception as e:
+                    print(f"Skipping {name}: {e}")
+
+        # === Multiprocessing Mode ===
+        if args.mode in ("multiprocessing", "both"):
+            if args.mode == "both":
+                print(f"\n{Fore.CYAN}--- Multiprocessing Mode ---{Style.RESET_ALL}")
+
+            # Internal Indexes (Multiprocessing)
+            for cls, name, iargs in indexes:
+                if args.only_external:
+                    continue
+                try:
+                    res_mp, conflicts_mp = benchmark_throughput_vs_processes(
+                        cls, name, data, queries, K, iargs, rw_ratio=args.rw_ratio
+                    )
+                    if res_mp is None:
+                        continue
+                    mp_name = f"{name} (MP)"
+                    throughput_results[mp_name] = res_mp
+                    conflict_results[mp_name] = conflicts_mp
+                except Exception as e:
+                    print(f"Skipping {name} (MP): {e}")
 
         # Cache results
         results_cache["throughput"] = throughput_results
@@ -1700,6 +1912,18 @@ def run_benchmark(args=None):
             action="store_false",
             dest="auto_start_redis",
             help="Disable Docker auto-start for Redis benchmark preflight",
+        )
+        parser.add_argument(
+            "--mode",
+            type=str,
+            choices=["threading", "multiprocessing", "both"],
+            default="threading",
+            help="Concurrency mode: threading (default), multiprocessing, or both",
+        )
+        parser.add_argument(
+            "--verify-gil",
+            action="store_true",
+            help="Run GIL release verification test before benchmarks",
         )
         args = parser.parse_args()
 

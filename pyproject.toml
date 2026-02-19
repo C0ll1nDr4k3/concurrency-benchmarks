@@ -5,19 +5,31 @@ description = "Concurrent Vector Index Implementations for ANN Search"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "h5py",
-    "matplotlib",
-    "numpy",
-    "requests",
-    "duckdb",
-    "usearch",
-    "pymilvus",
-    "milvus-lite",
-    "weaviate-client",
-    "qdrant-client",
-    "redis",
-    "faiss-cpu>=1.13.2",
-    "colorama",
+    "numpy>=1.24",
+    "matplotlib>=3.7",
+    "h5py>=3.8",
+    "requests>=2.31",
+    "colorama>=0.4",
+    "duckdb>=0.9",
+]
+
+[project.optional-dependencies]
+external = [
+    "faiss-cpu>=1.7",
+    "usearch>=2.9",
+    "pymilvus>=2.3",
+    "milvus-lite>=2.3",
+    "weaviate-client>=4.4",
+    "qdrant-client>=1.7",
+    "redis>=5.0",
+]
+dev = [
+    "pytest>=7.4",
+    "pytest-benchmark>=4.0",
+    "pybind11>=3.0.1",
+]
+full = [
+    "nilvec[external,dev]",
 ]
 
 [build-system]
@@ -29,11 +41,6 @@ setup = ["-Duse_hdf5=true"]
 
 [tool.uv]
 reinstall-package = ["nilvec"]
-
-[dependency-groups]
-dev = [
-    "pybind11>=3.0.1",
-]
 
 [tool.uv.sources]
 nilvec = { path = ".", editable = true }

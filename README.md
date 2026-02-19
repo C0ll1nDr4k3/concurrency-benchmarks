@@ -27,11 +27,17 @@ pip install "git+https://github.com/C0ll1nDr4k3/concurrency-benchmarks.git#egg=n
 
 1.  **Install Python Dependencies**:
     ```bash
-    # For CPU
-    uv sync --extra cpu
+    # Basic dependencies only
+    uv pip install -e .
 
-    # For GPU (Linux only)
-    uv sync --extra gpu
+    # With external benchmarks (FAISS, USearch, Milvus, etc.)
+    uv pip install -e ".[external]"
+
+    # With development tools (pytest, etc.)
+    uv pip install -e ".[dev]"
+
+    # Everything (recommended for development)
+    uv pip install -e ".[full]"
     ```
 
 2.  **Prepare Data**:
@@ -90,6 +96,92 @@ uv run main.py --dataset data/sift-128-euclidean.hdf5 --results-db benchmark_res
 
 # Optional legacy pickle export
 uv run main.py --dataset data/sift-128-euclidean.hdf5 --save-results benchmark_results.pkl
+```
+
+## Concurrency Model
+
+NilVec supports two concurrency modes for benchmarking: **threading** (default) and **multiprocessing**.
+
+### Threading Mode (Default)
+
+NilVec's Python bindings release the GIL (Global Interpreter Lock) for all performance-critical operations:
+- `insert()` - GIL released during vector insertion
+- `search()` - GIL released during k-NN search
+- `train()` - GIL released during k-means training
+
+This enables true multicore parallelism when using Python's `threading` module, allowing multiple threads to execute C++ code simultaneously on different CPU cores.
+
+**Verify GIL release:**
+```bash
+uv run pytest test/test_gil_release.py -v
+```
+
+Expected output: ~3-4x speedup with 4 threads, confirming parallel execution.
+
+**Run threading benchmarks:**
+```bash
+# Threading mode (default)
+uv run python -m nilvec.benchmark
+
+# Explicit threading mode
+uv run python -m nilvec.benchmark --mode threading
+```
+
+### Multiprocessing Mode
+
+For scenarios requiring complete process isolation, NilVec supports multiprocessing mode where each process creates its own independent index instance.
+
+**Run multiprocessing benchmarks:**
+```bash
+# Multiprocessing mode
+uv run python -m nilvec.benchmark --mode multiprocessing
+```
+
+Each process:
+- Creates its own index instance
+- Operates on a partition of the data
+- Reports throughput independently
+- Results are aggregated in the parent process
+
+**Use cases:**
+- Validating threading performance
+- Testing deployment with multiple index instances
+- Avoiding any potential GIL contention in Python layer
+
+### Performance Comparison
+
+Compare threading vs multiprocessing side-by-side:
+
+```bash
+# Run both modes and generate comparison plots
+uv run python -m nilvec.benchmark --mode both
+
+# Quick comparison with small dataset
+uv run python -m nilvec.benchmark --mode both --limit 1000 --skip-recall
+```
+
+This generates plots showing both threading and multiprocessing throughput on the same graph.
+
+**Expected Results:**
+
+Threading should match or exceed multiprocessing performance because:
+- GIL is properly released for C++ operations
+- No inter-process communication overhead
+- Shared memory access is more efficient
+
+Multiprocessing provides validation and is useful for deployment scenarios with multiple independent index instances.
+
+### Advanced Options
+
+```bash
+# Verify GIL release before running benchmarks
+uv run python -m nilvec.benchmark --verify-gil
+
+# Control read/write ratio (0.0 = read-only, 1.0 = write-only)
+uv run python -m nilvec.benchmark --rw-ratio 0.5
+
+# Test all datasets with both concurrency modes
+uv run python -m nilvec.benchmark --mode both --all
 ```
 
 ## Latest Benchmarks
