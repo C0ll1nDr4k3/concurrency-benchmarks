@@ -11,10 +11,7 @@ dependencies = [
     "requests>=2.31",
     "colorama>=0.4",
     "duckdb>=0.9",
-]
-
-[project.optional-dependencies]
-external = [
+    "pytest>=9.0.2",
     "faiss-cpu>=1.7",
     "usearch>=2.9",
     "pymilvus>=2.3",
@@ -23,13 +20,15 @@ external = [
     "qdrant-client>=1.7",
     "redis>=5.0",
 ]
+
+[project.optional-dependencies]
 dev = [
     "pytest>=7.4",
     "pytest-benchmark>=4.0",
     "pybind11>=3.0.1",
 ]
 full = [
-    "nilvec[external,dev]",
+    "nilvec[dev]",
 ]
 
 [build-system]
@@ -38,6 +37,9 @@ build-backend = "mesonpy"
 
 [tool.meson-python.args]
 setup = ["-Duse_hdf5=true"]
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
 
 [tool.uv]
 reinstall-package = ["nilvec"]

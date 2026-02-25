@@ -50,7 +50,9 @@ def _load_plot_data(db_path, run_id=None):
     if run_meta is None:
         raise ValueError(f"No benchmark_runs entry for run_id={selected_run_id}")
 
-    rw_ratio, thread_counts_json, k, dim, dataset_name, num_vectors, limit_rows = run_meta
+    rw_ratio, thread_counts_json, k, dim, dataset_name, num_vectors, limit_rows = (
+        run_meta
+    )
     thread_counts = json.loads(thread_counts_json)
 
     throughput_rows = conn.execute(
@@ -67,7 +69,13 @@ def _load_plot_data(db_path, run_id=None):
     conflicts = {}
     external_names = set()
     thread_pos = {int(t): i for i, t in enumerate(thread_counts)}
-    for index_name, thread_count, throughput_val, conflict_rate, is_external in throughput_rows:
+    for (
+        index_name,
+        thread_count,
+        throughput_val,
+        conflict_rate,
+        is_external,
+    ) in throughput_rows:
         if index_name not in throughput:
             throughput[index_name] = [float("nan")] * len(thread_counts)
             conflicts[index_name] = [float("nan")] * len(thread_counts)
@@ -239,7 +247,9 @@ if __name__ == "__main__":
         default="",
         help="Optional run_id to plot (default: latest run)",
     )
-    parser.add_argument("--out", type=str, default="paper/plots", help="Output directory")
+    parser.add_argument(
+        "--out", type=str, default="paper/plots", help="Output directory"
+    )
     parser.add_argument("--dpi", type=int, default=1200, help="DPI for plots")
 
     args = parser.parse_args()

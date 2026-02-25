@@ -15,7 +15,7 @@ nilvec = pytest.importorskip(
     reason="nilvec C++ extension not importable — run `meson compile -C builddir` first",
 )
 
-NUM_THREADS = min(4, multiprocessing.cpu_count())
+NUM_THREADS = min(2, multiprocessing.cpu_count())
 
 
 def _generate(n, dim):

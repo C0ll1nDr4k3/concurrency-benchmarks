@@ -6,10 +6,10 @@ resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'emscripten'",
     "python_full_version >= '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'win32'",
-    "python_full_version < '3.13' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'emscripten'",
-    "python_full_version < '3.13' and sys_platform == 'emscripten'",
     "python_full_version == '3.13.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version < '3.13' and sys_platform == 'win32'",
+    "python_full_version < '3.13' and sys_platform == 'emscripten'",
     "python_full_version < '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 
@@ -735,10 +735,18 @@ source = { editable = "." }
 dependencies = [
     { name = "colorama" },
     { name = "duckdb" },
+    { name = "faiss-cpu" },
     { name = "h5py" },
     { name = "matplotlib" },
+    { name = "milvus-lite" },
     { name = "numpy" },
+    { name = "pymilvus" },
+    { name = "pytest" },
+    { name = "qdrant-client" },
+    { name = "redis" },
     { name = "requests" },
+    { name = "usearch" },
+    { name = "weaviate-client" },
 ]
 
 [package.optional-dependencies]
@@ -747,49 +755,34 @@ dev = [
     { name = "pytest" },
     { name = "pytest-benchmark" },
 ]
-external = [
-    { name = "faiss-cpu" },
-    { name = "milvus-lite" },
-    { name = "pymilvus" },
-    { name = "qdrant-client" },
-    { name = "redis" },
-    { name = "usearch" },
-    { name = "weaviate-client" },
-]
 full = [
-    { name = "faiss-cpu" },
-    { name = "milvus-lite" },
     { name = "pybind11" },
-    { name = "pymilvus" },
     { name = "pytest" },
     { name = "pytest-benchmark" },
-    { name = "qdrant-client" },
-    { name = "redis" },
-    { name = "usearch" },
-    { name = "weaviate-client" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "colorama", specifier = ">=0.4" },
     { name = "duckdb", specifier = ">=0.9" },
-    { name = "faiss-cpu", marker = "extra == 'external'", specifier = ">=1.7" },
+    { name = "faiss-cpu", specifier = ">=1.7" },
     { name = "h5py", specifier = ">=3.8" },
     { name = "matplotlib", specifier = ">=3.7" },
-    { name = "milvus-lite", marker = "extra == 'external'", specifier = ">=2.3" },
-    { name = "nilvec", extras = ["external", "dev"], marker = "extra == 'full'", editable = "." },
+    { name = "milvus-lite", specifier = ">=2.3" },
+    { name = "nilvec", extras = ["dev"], marker = "extra == 'full'", editable = "." },
     { name = "numpy", specifier = ">=1.24" },
     { name = "pybind11", marker = "extra == 'dev'", specifier = ">=3.0.1" },
-    { name = "pymilvus", marker = "extra == 'external'", specifier = ">=2.3" },
+    { name = "pymilvus", specifier = ">=2.3" },
+    { name = "pytest", specifier = ">=9.0.2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.4" },
     { name = "pytest-benchmark", marker = "extra == 'dev'", specifier = ">=4.0" },
-    { name = "qdrant-client", marker = "extra == 'external'", specifier = ">=1.7" },
-    { name = "redis", marker = "extra == 'external'", specifier = ">=5.0" },
+    { name = "qdrant-client", specifier = ">=1.7" },
+    { name = "redis", specifier = ">=5.0" },
     { name = "requests", specifier = ">=2.31" },
-    { name = "usearch", marker = "extra == 'external'", specifier = ">=2.9" },
-    { name = "weaviate-client", marker = "extra == 'external'", specifier = ">=4.4" },
+    { name = "usearch", specifier = ">=2.9" },
+    { name = "weaviate-client", specifier = ">=4.4" },
 ]
-provides-extras = ["external", "dev", "full"]
+provides-extras = ["dev", "full"]
 
 [[package]]
 name = "numpy"

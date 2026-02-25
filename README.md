@@ -210,11 +210,9 @@ Recall vs. QPS.
 
 ## Testing
 
-To run the Python binding tests:
-
 ```bash
 export PYTHONPATH=$PYTHONPATH:$(pwd)/builddir
-uv run test/test_bindings.py
+uv run pytest
 
 ## Code Formatting
 

@@ -87,6 +87,36 @@ RW_RATIO = 0.1
 THREAD_COUNTS = [2**n for n in range(1, 5)]
 
 
+def parse_rw_bands(band_strs):
+    """Parse band strings like '0.01-0.05' into (low, high) tuples."""
+    bands = []
+    for s in band_strs:
+        parts = s.split("-", 1)
+        if len(parts) != 2:
+            raise ValueError(
+                f"Invalid band format '{s}', expected 'low-high' (e.g. 0.01-0.05)"
+            )
+        low, high = float(parts[0]), float(parts[1])
+        if not (0.0 <= low <= 1.0 and 0.0 <= high <= 1.0):
+            raise ValueError(f"Band values must be in [0, 1], got {low}-{high}")
+        bands.append((low, high))
+    return bands
+
+
+def make_rw_schedule(band, thread_counts):
+    """Linearly interpolate write ratio from band[0] to band[1] across thread counts."""
+    low, high = band
+    n = len(thread_counts)
+    if n == 1:
+        return [low]
+    return [low + (high - low) * i / (n - 1) for i in range(n)]
+
+
+def format_band_label(band):
+    """Format a band tuple as a compact label like 'W:1%-5%'."""
+    return f"W:{band[0] * 100:.0f}%-{band[1] * 100:.0f}%"
+
+
 # Icon mapping: "Substring": ("path", zoom)
 ICON_MAPPING = {
     "FAISS": ("paper/imgs/meta.png", 0.005),
@@ -113,9 +143,13 @@ def format_benchmark_header(name, rw_ratio):
         name_color = Fore.MAGENTA
     else:
         name_color = Fore.CYAN
+    if isinstance(rw_ratio, tuple):
+        ratio_label = format_band_label(rw_ratio)
+    else:
+        ratio_label = f"W/R={rw_ratio}"
     return (
         f"\n{Style.BRIGHT}{Fore.CYAN}Benchmarking Throughput{Style.RESET_ALL} "
-        f"{Fore.WHITE}(W/R={rw_ratio}){Style.RESET_ALL}: "
+        f"{Fore.WHITE}({ratio_label}){Style.RESET_ALL}: "
         f"{Style.BRIGHT}{name_color}{name}{Style.RESET_ALL}"
     )
 
@@ -884,7 +918,12 @@ class BenchmarkResultsStore:
         return run_id
 
     def save_throughput(
-        self, run_id, throughput_results, conflict_results, external_names, thread_counts
+        self,
+        run_id,
+        throughput_results,
+        conflict_results,
+        external_names,
+        thread_counts,
     ):
         rows = []
         for index_name, values in throughput_results.items():
@@ -939,18 +978,21 @@ class BenchmarkResultsStore:
             )
 
     def _compatible_where(self, meta):
-        return """
+        return (
+            """
             dataset_name = ? AND dim = ? AND num_vectors = ? AND num_queries = ?
             AND k = ? AND rw_ratio = ? AND thread_counts_json = ?
-        """, [
-            meta["dataset_name"],
-            meta["dim"],
-            meta["num_vectors"],
-            meta["num_queries"],
-            meta["k"],
-            meta["rw_ratio"],
-            json.dumps(meta["thread_counts"]),
-        ]
+        """,
+            [
+                meta["dataset_name"],
+                meta["dim"],
+                meta["num_vectors"],
+                meta["num_queries"],
+                meta["k"],
+                meta["rw_ratio"],
+                json.dumps(meta["thread_counts"]),
+            ],
+        )
 
     def cross_pollinate_throughput(
         self, meta, run_id, throughput_results, conflict_results, external_names
@@ -992,8 +1034,12 @@ class BenchmarkResultsStore:
             if thread_count not in thread_pos:
                 continue
             if index_name not in throughput_results:
-                throughput_results[index_name] = [float("nan")] * len(meta["thread_counts"])
-                conflict_results[index_name] = [float("nan")] * len(meta["thread_counts"])
+                throughput_results[index_name] = [float("nan")] * len(
+                    meta["thread_counts"]
+                )
+                conflict_results[index_name] = [float("nan")] * len(
+                    meta["thread_counts"]
+                )
                 injected_indexes.add(index_name)
             i = thread_pos[thread_count]
             if np.isnan(throughput_results[index_name][i]):
@@ -1002,7 +1048,12 @@ class BenchmarkResultsStore:
                 conflict_results[index_name][i] = float(conflict_rate)
             if is_external:
                 external_set.add(index_name)
-        return throughput_results, conflict_results, sorted(external_set), sorted(injected_indexes)
+        return (
+            throughput_results,
+            conflict_results,
+            sorted(external_set),
+            sorted(injected_indexes),
+        )
 
     def cross_pollinate_recall(self, meta, run_id, existing_runs):
         existing_names = {name for name, _, _, _ in existing_runs}
@@ -1041,13 +1092,17 @@ class BenchmarkResultsStore:
         for index_name, recall, qps, line_style, point_order in rows:
             if index_name in existing_names:
                 continue
-            grouped.setdefault(index_name, {"recalls": [], "qps": [], "style": line_style})
+            grouped.setdefault(
+                index_name, {"recalls": [], "qps": [], "style": line_style}
+            )
             grouped[index_name]["recalls"].append(float(recall))
             grouped[index_name]["qps"].append(float(qps))
 
         injected = []
         for index_name, data in grouped.items():
-            injected.append((index_name, tuple(data["recalls"]), tuple(data["qps"]), data["style"]))
+            injected.append(
+                (index_name, tuple(data["recalls"]), tuple(data["qps"]), data["style"])
+            )
         return existing_runs + injected, [name for name, _, _, _ in injected]
 
     def close(self):
@@ -1192,19 +1247,35 @@ def benchmark_throughput_vs_threads(
 ):
     """
     Run Throughput vs Threads benchmark with configurable R/W split.
-    rw_ratio: Fraction of threads performing inserts (0.0 = Read Only, 1.0 = Write Only)
+    rw_ratio: float for a fixed ratio, or list of floats (one per THREAD_COUNTS entry)
+              for a ramping schedule across thread counts.
     """
     if index_args is None:
         index_args = []
 
-    print(format_benchmark_header(index_name, rw_ratio))
+    # Normalize rw_ratio into a per-thread-count schedule
+    if isinstance(rw_ratio, (list, tuple)) and not isinstance(
+        rw_ratio[0], (int, float)
+    ):
+        rw_schedule = rw_ratio
+    elif isinstance(rw_ratio, list):
+        rw_schedule = rw_ratio
+    else:
+        rw_schedule = [rw_ratio] * len(THREAD_COUNTS)
+
+    # Display header with band info if schedule varies
+    if rw_schedule[0] != rw_schedule[-1]:
+        header_ratio = (rw_schedule[0], rw_schedule[-1])
+    else:
+        header_ratio = rw_schedule[0]
+    print(format_benchmark_header(index_name, header_ratio))
     index_start_time = time.time()
     results = []
     conflict_rates = []
 
     stop_event = threading.Event()
 
-    for num_threads in THREAD_COUNTS:
+    for tc_idx, num_threads in enumerate(THREAD_COUNTS):
         if stop_event.is_set():
             break
 
@@ -1252,16 +1323,17 @@ def benchmark_throughput_vs_threads(
                 local_ops += 1
             return local_ops
 
-        # Calculate thread split
-        num_insert_threads = int(num_threads * rw_ratio)
-        if rw_ratio > 0.0 and rw_ratio < 1.0:
+        # Calculate thread split using per-step ratio
+        step_ratio = rw_schedule[tc_idx]
+        num_insert_threads = int(num_threads * step_ratio)
+        if step_ratio > 0.0 and step_ratio < 1.0:
             if num_insert_threads == 0 and num_threads > 0:
                 num_insert_threads = 1
             elif num_insert_threads == num_threads and num_threads > 1:
                 num_insert_threads -= 1
-        elif rw_ratio == 0.0:
+        elif step_ratio == 0.0:
             num_insert_threads = 0
-        elif rw_ratio == 1.0:
+        elif step_ratio == 1.0:
             num_insert_threads = num_threads
 
         num_search_threads = num_threads - num_insert_threads
@@ -1350,14 +1422,26 @@ def benchmark_throughput_vs_processes(
     """
     Run Throughput vs Processes benchmark with configurable R/W split.
     Each process creates its own independent index instance.
-    rw_ratio: Fraction of processes performing inserts (0.0 = Read Only, 1.0 = Write Only)
+    rw_ratio: float for a fixed ratio, or list of floats (one per THREAD_COUNTS entry)
+              for a ramping schedule across thread counts.
     """
     from concurrent.futures import ProcessPoolExecutor, as_completed
 
     if index_args is None:
         index_args = []
 
-    print(format_benchmark_header(index_name + " (MP)", rw_ratio))
+    # Normalize rw_ratio into a per-thread-count schedule
+    if isinstance(rw_ratio, list):
+        rw_schedule = rw_ratio
+    else:
+        rw_schedule = [rw_ratio] * len(THREAD_COUNTS)
+
+    # Display header with band info if schedule varies
+    if rw_schedule[0] != rw_schedule[-1]:
+        header_ratio = (rw_schedule[0], rw_schedule[-1])
+    else:
+        header_ratio = rw_schedule[0]
+    print(format_benchmark_header(index_name + " (MP)", header_ratio))
     index_start_time = time.time()
     results = []
     conflict_rates = []  # No conflict tracking in multiprocessing mode
@@ -1365,17 +1449,18 @@ def benchmark_throughput_vs_processes(
     # Pre-compute training data if needed
     train_data = data if "IVF" in index_name else None
 
-    for num_processes in THREAD_COUNTS:
-        # Calculate process split (same logic as threading)
-        num_insert_procs = int(num_processes * rw_ratio)
-        if rw_ratio > 0.0 and rw_ratio < 1.0:
+    for tc_idx, num_processes in enumerate(THREAD_COUNTS):
+        # Calculate process split using per-step ratio
+        step_ratio = rw_schedule[tc_idx]
+        num_insert_procs = int(num_processes * step_ratio)
+        if step_ratio > 0.0 and step_ratio < 1.0:
             if num_insert_procs == 0 and num_processes > 0:
                 num_insert_procs = 1
             elif num_insert_procs == num_processes and num_processes > 1:
                 num_insert_procs -= 1
-        elif rw_ratio == 0.0:
+        elif step_ratio == 0.0:
             num_insert_procs = 0
-        elif rw_ratio == 1.0:
+        elif step_ratio == 1.0:
             num_insert_procs = num_processes
 
         num_search_procs = num_processes - num_insert_procs
@@ -1408,7 +1493,15 @@ def benchmark_throughput_vs_processes(
                 tasks.append(
                     (
                         _mp_worker_search,
-                        (index_cls, index_args, DIM, preload_data, queries, k, train_data),
+                        (
+                            index_cls,
+                            index_args,
+                            DIM,
+                            preload_data,
+                            queries,
+                            k,
+                            train_data,
+                        ),
                     )
                 )
 
@@ -1516,6 +1609,7 @@ def _run_single_dataset(args, dataset_path):
         "num_queries": NUM_QUERIES,
         "k": K,
         "rw_ratio": args.rw_ratio,
+        "rw_bands": args._rw_bands,
         "thread_counts": THREAD_COUNTS,
         "only_external": args.only_external,
         "skip_recall": args.skip_recall,
@@ -1539,6 +1633,8 @@ def _run_single_dataset(args, dataset_path):
         "conflicts": {},
         "thread_counts": THREAD_COUNTS,
         "rw_ratio": args.rw_ratio,
+        "rw_bands": args._rw_bands,
+        "rw_schedules": args._rw_schedules,
         "external_names": [],
     }
 
@@ -1618,6 +1714,32 @@ def _run_single_dataset(args, dataset_path):
         plt.savefig(recall_path, dpi=DPI)
         print(f"Saved {recall_path}")
 
+    # --- Write-ratio schedule plot (before benchmarks so you see it early) ---
+    if not args.skip_throughput and args._rw_bands:
+        plt.figure(figsize=(8, 4))
+        for sched_idx, schedule in enumerate(args._rw_schedules):
+            band = args._rw_bands[sched_idx]
+            label = format_band_label(band)
+            plt.plot(THREAD_COUNTS, [r * 100 for r in schedule], "o-", label=label)
+            for x, y in zip(THREAD_COUNTS, schedule):
+                plt.annotate(
+                    f"{y * 100:.1f}%",
+                    (x, y * 100),
+                    textcoords="offset points",
+                    xytext=(0, 8),
+                    ha="center",
+                    fontsize=8,
+                )
+        plt.xlabel("Threads")
+        plt.ylabel("Write Ratio (%)")
+        plt.title("Write-Ratio Schedule")
+        plt.legend()
+        plt.grid(True)
+        plt.tight_layout()
+        schedule_path = os.path.join(plot_dir, "rw_schedule.svg")
+        plt.savefig(schedule_path, dpi=DPI)
+        print(f"Saved {schedule_path}")
+
     # --- throughput vs Threads ---
     if not args.skip_throughput:
         print("\n=== Throughput vs Threads Benchmark ===")
@@ -1665,60 +1787,74 @@ def _run_single_dataset(args, dataset_path):
                 "  (use --no-auto-start-redis to disable Docker auto-start)"
             )
 
-        # === Threading Mode ===
-        if args.mode in ("threading", "both"):
-            if args.mode == "both":
-                print(f"\n{Fore.CYAN}--- Threading Mode ---{Style.RESET_ALL}")
+        multi_band = args._rw_bands is not None and len(args._rw_schedules) > 1
 
-            # External Indexes (run first — these sometimes crash)
-            for cls, name, iargs in externals:
-                try:
-                    res, conflicts = benchmark_throughput_vs_threads(
-                        cls, name, data, queries, K, iargs, rw_ratio=args.rw_ratio
-                    )
-                    if res is None:
+        for sched_idx, rw_schedule in enumerate(args._rw_schedules):
+            band = args._rw_bands[sched_idx] if args._rw_bands else None
+            band_suffix = f" [{format_band_label(band)}]" if multi_band and band else ""
+
+            if multi_band:
+                print(
+                    f"\n{Fore.CYAN}--- Band {sched_idx + 1}: "
+                    f"{format_band_label(band)} ---{Style.RESET_ALL}"
+                )
+
+            def _result_key(name):
+                return f"{name}{band_suffix}"
+
+            # === Threading Mode ===
+            if args.mode in ("threading", "both"):
+                if args.mode == "both":
+                    print(f"\n{Fore.CYAN}--- Threading Mode ---{Style.RESET_ALL}")
+
+                # External Indexes (run first -- these sometimes crash)
+                for cls, name, iargs in externals:
+                    try:
+                        res, conflicts = benchmark_throughput_vs_threads(
+                            cls, name, data, queries, K, iargs, rw_ratio=rw_schedule
+                        )
+                        if res is None:
+                            continue
+                        throughput_results[_result_key(name)] = res
+                        conflict_results[_result_key(name)] = conflicts
+                    except Exception as e:
+                        print(f"Skipping {name}: {e}")
+
+                # Internal Indexes
+                for cls, name, iargs in indexes:
+                    if args.only_external:
                         continue
-                    throughput_results[name] = res
-                    # External libs don't report conflict rates usually, but we capture 0s
-                    conflict_results[name] = conflicts
-                except Exception as e:
-                    print(f"Skipping {name}: {e}")
+                    try:
+                        res, conflicts = benchmark_throughput_vs_threads(
+                            cls, name, data, queries, K, iargs, rw_ratio=rw_schedule
+                        )
+                        if res is None:
+                            continue
+                        throughput_results[_result_key(name)] = res
+                        conflict_results[_result_key(name)] = conflicts
+                    except Exception as e:
+                        print(f"Skipping {name}: {e}")
 
-            # Internal Indexes
-            for cls, name, iargs in indexes:
-                if args.only_external:
-                    continue
-                try:
-                    res, conflicts = benchmark_throughput_vs_threads(
-                        cls, name, data, queries, K, iargs, rw_ratio=args.rw_ratio
-                    )
-                    if res is None:
+            # === Multiprocessing Mode ===
+            if args.mode in ("multiprocessing", "both"):
+                if args.mode == "both":
+                    print(f"\n{Fore.CYAN}--- Multiprocessing Mode ---{Style.RESET_ALL}")
+
+                # Internal Indexes (Multiprocessing)
+                for cls, name, iargs in indexes:
+                    if args.only_external:
                         continue
-                    throughput_results[name] = res
-                    conflict_results[name] = conflicts
-                except Exception as e:
-                    print(f"Skipping {name}: {e}")
-
-        # === Multiprocessing Mode ===
-        if args.mode in ("multiprocessing", "both"):
-            if args.mode == "both":
-                print(f"\n{Fore.CYAN}--- Multiprocessing Mode ---{Style.RESET_ALL}")
-
-            # Internal Indexes (Multiprocessing)
-            for cls, name, iargs in indexes:
-                if args.only_external:
-                    continue
-                try:
-                    res_mp, conflicts_mp = benchmark_throughput_vs_processes(
-                        cls, name, data, queries, K, iargs, rw_ratio=args.rw_ratio
-                    )
-                    if res_mp is None:
-                        continue
-                    mp_name = f"{name} (MP)"
-                    throughput_results[mp_name] = res_mp
-                    conflict_results[mp_name] = conflicts_mp
-                except Exception as e:
-                    print(f"Skipping {name} (MP): {e}")
+                    try:
+                        res_mp, conflicts_mp = benchmark_throughput_vs_processes(
+                            cls, name, data, queries, K, iargs, rw_ratio=rw_schedule
+                        )
+                        if res_mp is None:
+                            continue
+                        mp_name = f"{name} (MP)"
+                        throughput_results[_result_key(mp_name)] = res_mp
+                        conflict_results[_result_key(mp_name)] = conflicts_mp
+                    except Exception as e:
+                        print(f"Skipping {name} (MP): {e}")
 
         # Cache results
         results_cache["throughput"] = throughput_results
@@ -1787,7 +1923,13 @@ def _run_single_dataset(args, dataset_path):
 
         plt.xlabel("Threads")
         plt.ylabel("Ops/sec")
-        plt.title(f"Throughput (W:{args.rw_ratio:.1f}, R:{1.0 - args.rw_ratio:.1f})")
+        if args._rw_bands:
+            band_labels = ", ".join(format_band_label(b) for b in args._rw_bands)
+            plt.title(f"Throughput ({band_labels})")
+        else:
+            plt.title(
+                f"Throughput (W:{args.rw_ratio:.1f}, R:{1.0 - args.rw_ratio:.1f})"
+            )
         plt.legend()
         plt.grid(True)
         plt.tight_layout()
@@ -1824,7 +1966,9 @@ def _run_single_dataset(args, dataset_path):
                 THREAD_COUNTS,
             )
         if results_cache["recall_vs_qps"]["runs"]:
-            results_store.save_recall_runs(run_id, results_cache["recall_vs_qps"]["runs"])
+            results_store.save_recall_runs(
+                run_id, results_cache["recall_vs_qps"]["runs"]
+            )
         results_store.close()
 
     if args.save_results:
@@ -1860,7 +2004,16 @@ def run_benchmark(args=None):
             "--rw-ratio",
             type=float,
             default=RW_RATIO,
-            help="Read/Write ratio (0.0=Read, 1.0=Write)",
+            help="Fixed write ratio (0.0=Read, 1.0=Write). Overridden by --rw-bands.",
+        )
+        parser.add_argument(
+            "--rw-bands",
+            nargs="+",
+            type=str,
+            default=["0.01-0.05"],
+            help="Write-ratio bands (default: 0.01-0.05). "
+            "Ratio ramps linearly from low to high across thread counts. "
+            "Multiple bands run separate sweeps, e.g. '0.01-0.05 0.25-0.50'.",
         )
         parser.add_argument(
             "--limit",
@@ -1927,6 +2080,16 @@ def run_benchmark(args=None):
         )
         args = parser.parse_args()
 
+    # Resolve rw_bands into schedules (list of per-thread-count ratio lists)
+    if getattr(args, "rw_bands", None):
+        args._rw_bands = parse_rw_bands(args.rw_bands)
+        args._rw_schedules = [
+            make_rw_schedule(b, THREAD_COUNTS) for b in args._rw_bands
+        ]
+    else:
+        args._rw_bands = [(args.rw_ratio, args.rw_ratio)]
+        args._rw_schedules = [[args.rw_ratio] * len(THREAD_COUNTS)]
+
     suite_start_time = time.time()
 
     if getattr(args, "all", False):
@@ -1948,9 +2111,7 @@ def run_benchmark(args=None):
             dataset_timings[ds_name] = elapsed
 
         suite_elapsed = time.time() - suite_start_time
-        print(
-            f"\n{Style.BRIGHT}{Fore.CYAN}=== Full Suite Summary ==={Style.RESET_ALL}"
-        )
+        print(f"\n{Style.BRIGHT}{Fore.CYAN}=== Full Suite Summary ==={Style.RESET_ALL}")
         for ds_name, elapsed in dataset_timings.items():
             print(f"  {ds_name}: {_format_elapsed(elapsed)}")
         print(

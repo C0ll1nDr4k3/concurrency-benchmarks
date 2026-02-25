@@ -8,6 +8,8 @@ Never use em dashes.
 
 Never make a claim about anything external without first citing specifically where and how it supports said claim.
 
+Avoid adding redundant expositions that experts would already be familiar with.
+
 ## Build & Development
 
 This is a C++23 project with Python bindings (pybind11), built with Meson and managed with `uv`.
