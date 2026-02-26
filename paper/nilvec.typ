@@ -107,52 +107,22 @@ Qdrant was omitted from the plotted throughput comparison because its performanc
     columns: 2,
     gutter: 12pt,
     figure(
-      image("plots/throughput_scaling.svg", width: 100%),
+      image("plots/sift-128-euclidean_full/throughput_scaling.svg", width: 100%),
       caption: [SIFT-128],
     ),
     figure(
-      image("plots/throughput_scaling.svg", width: 100%),
+      image("plots/fashion-mnist-784-euclidean_full/throughput_scaling.svg", width: 100%),
       caption: [Fashion-MNIST-784],
     ),
-    figure(
-      image("plots/throughput_scaling.svg", width: 100%),
-      caption: [GloVe-100],
-    ),
-    figure(
-      image("plots/throughput_scaling.svg", width: 100%),
-      caption: [GloVe-25],
-    ),
   ),
   caption: [
-    Throughput scaling with increasing numbers of threads for each index type, across all benchmark datasets.
-  ],
-)
-
-#figure(
-  grid(
-    columns: 2,
-    gutter: 12pt,
-    figure(
-      image("plots/throughput_scaling.svg", width: 100%),
-      caption: [GIST-960],
-    ),
-    figure(
-      image("plots/throughput_scaling.svg", width: 100%),
-      caption: [NYTimes-256],
-    ),
-    figure(
-      image("plots/throughput_scaling.svg", width: 100%),
-      caption: [MNIST-784],
-    ),
-  ),
-  caption: [
-    Throughput scaling with increasing numbers of threads for each index type, across all benchmark datasets.
+    Throughput scaling with increasing numbers of threads for each index type, for tested full-run datasets.
   ],
 )
 
 = Discussion
 
-- *_Why hasn't this been done before?_* The predominant paradigm has been offline construction followed by read-only serving, so reader-writer concurrency at the index level simply never arose. Systems that do accept writes typically side-step the problem architecturally: mutable segments are flushed to read-only storage on a rolling basis, and searches hit only sealed data @wang2021milvus. Streaming workloads driven by retrieval-augmented generation @lewis2020rag have only recently made in-place concurrent update a practical requirement.
+- *_Why hasn't this been done before?_* The predominant paradigm has been offline construction followed by read-only serving, so reader-writer concurrency at the index level simply never arose. Systems that do accept writes typically side-step the problem architecturally: mutable segments are flushed to read-only storage on a rolling basis, and searches hit only sealed data @wang2021milvus. Streaming workloads driven by retrieval-augmented generation @lewis2020rag have only recently made in-place concurrent update a practical consideration.
 
 
 - *_Why does HNSW degrade more under concurrent writes than IVF?_* The answer lies in a structural asymmetry between the two index types. HNSW is a navigable small-world graph: its search correctness depends on the graph remaining well-connected across layers @malkov2020hnsw. During insertion, a new node is wired into the graph by selecting neighbors via a heuristic and then back-linking those neighbors to the new node @malkov2020hnsw. Under concurrent writes, these two steps are not atomic. A racing writer can observe a partially-linked node, traverse a stale edge, or have its own neighbor list pruned before its back-links are established, any of which can leave the graph with weakly connected or entirely isolated nodes. Heuristics like deferred or batched pruning reduce the frequency of such breaks but cannot eliminate them: they trade recall loss for throughput, rather than recovering the full structural guarantee. IVF does not share this vulnerability. At the coarse quantizer level, cluster assignment is a read-only operation; inserting a vector into a cluster appends to a list and requires only a per-cluster lock @douze2024faiss. Concurrent writers targeting different clusters are entirely independent, and even writers within the same cluster contend only on a flat append structure with no graph invariant to preserve. The degradation seen in HNSW throughput and recall under high write concurrency is therefore not merely an implementation artifact; it reflects a fundamental tension between the graph connectivity invariant that makes HNSW fast and the atomicity that concurrent mutation requires.
