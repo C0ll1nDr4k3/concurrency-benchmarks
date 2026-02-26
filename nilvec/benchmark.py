@@ -16,6 +16,7 @@ import h5py
 import requests
 import matplotlib.image as mpimg
 from matplotlib.offsetbox import OffsetImage, AnnotationBbox
+from matplotlib.lines import Line2D
 import pickle
 
 import colorama
@@ -134,6 +135,151 @@ COLOR_MAPPING = {
     "Qdrant": "#dc244c",  # Raspberry Red
     "Redis": "#d82c20",  # Redis Red
 }
+
+STRATEGY_COLOR_MAPPING = {
+    "optimistic": "#2ca02c",  # green
+    "pessimistic": "#d62728",  # red
+    "vanilla": "#7f7f7f",  # neutral gray
+}
+
+TYPE_LINESTYLE_MAPPING = {
+    "HNSW": "-",
+    "IVF": "--",
+    "OTHER": "-.",
+}
+
+GRANULARITY_MARKER_MAPPING = {
+    "coarse": "s",
+    "fine": "o",
+    "vanilla": "^",
+    "other": "d",
+}
+
+
+def _normalize_index_name(name):
+    normalized = str(name)
+    for suffix in (" (MP)", " (history)"):
+        normalized = normalized.replace(suffix, "")
+    if " [" in normalized and normalized.endswith("]"):
+        normalized = normalized[: normalized.rfind(" [")]
+    return normalized.strip()
+
+
+def get_plot_style(name, external_names=None):
+    normalized = _normalize_index_name(name)
+    upper = normalized.upper()
+    external_names = external_names or []
+
+    for key, color in COLOR_MAPPING.items():
+        if key.upper() in upper:
+            return {
+                "color": color,
+                "linestyle": "--",
+                "marker": "*",
+                "alpha": 0.8,
+            }
+
+    if normalized in external_names:
+        return {
+            "color": "#4c4c4c",
+            "linestyle": "--",
+            "marker": "*",
+            "alpha": 0.8,
+        }
+
+    index_type = "HNSW" if "HNSW" in upper else ("IVF" if "IVF" in upper else "OTHER")
+
+    if "OPT" in upper:
+        strategy = "optimistic"
+    elif "PESS" in upper:
+        strategy = "pessimistic"
+    elif "VANILLA" in upper:
+        strategy = "vanilla"
+    else:
+        strategy = "vanilla"
+
+    if "COARSE" in upper:
+        granularity = "coarse"
+    elif "FINE" in upper:
+        granularity = "fine"
+    elif "VANILLA" in upper:
+        granularity = "vanilla"
+    else:
+        granularity = "other"
+
+    return {
+        "color": STRATEGY_COLOR_MAPPING[strategy],
+        "linestyle": TYPE_LINESTYLE_MAPPING[index_type],
+        "marker": GRANULARITY_MARKER_MAPPING[granularity],
+        "alpha": 0.85,
+    }
+
+
+def get_plot_style_token(name, external_names=None):
+    style = get_plot_style(name, external_names)
+    return f"{style['marker']}{style['linestyle']}"
+
+
+def add_semantic_style_legend(ax):
+    handles = [
+        Line2D(
+            [0],
+            [0],
+            color=STRATEGY_COLOR_MAPPING["optimistic"],
+            marker="o",
+            linestyle="-",
+            label="Optimistic",
+        ),
+        Line2D(
+            [0],
+            [0],
+            color=STRATEGY_COLOR_MAPPING["pessimistic"],
+            marker="o",
+            linestyle="-",
+            label="Pessimistic",
+        ),
+        Line2D(
+            [0],
+            [0],
+            color="black",
+            marker="o",
+            linestyle=TYPE_LINESTYLE_MAPPING["HNSW"],
+            label="HNSW",
+        ),
+        Line2D(
+            [0],
+            [0],
+            color="black",
+            marker="o",
+            linestyle=TYPE_LINESTYLE_MAPPING["IVF"],
+            label="IVF",
+        ),
+        Line2D(
+            [0],
+            [0],
+            color="black",
+            marker=GRANULARITY_MARKER_MAPPING["coarse"],
+            linestyle="-",
+            label="Coarse",
+        ),
+        Line2D(
+            [0],
+            [0],
+            color="black",
+            marker=GRANULARITY_MARKER_MAPPING["fine"],
+            linestyle="-",
+            label="Fine",
+        ),
+    ]
+    return ax.legend(
+        handles=handles,
+        title="Style key",
+        loc="lower right",
+        fontsize=8,
+        title_fontsize=9,
+        framealpha=0.9,
+    )
+
 
 # --- Wrappers ---
 
@@ -1665,10 +1811,19 @@ def _run_single_dataset(args, dataset_path):
             hnsw_params,
         )
         recalls, qps = zip(*res)
+        hnsw_style = get_plot_style("HNSW Vanilla")
         results_cache["recall_vs_qps"]["runs"].append(
-            ("HNSW Vanilla", recalls, qps, "o-")
+            ("HNSW Vanilla", recalls, qps, get_plot_style_token("HNSW Vanilla"))
         )
-        plt.plot(recalls, qps, "o-", label="HNSW Vanilla")
+        plt.plot(
+            recalls,
+            qps,
+            label="HNSW Vanilla",
+            color=hnsw_style["color"],
+            linestyle=hnsw_style["linestyle"],
+            marker=hnsw_style["marker"],
+            alpha=hnsw_style["alpha"],
+        )
 
         # IVFFlat Variants
         nprobe_values = [1, 2, 4, 8, 16, 32]
@@ -1685,10 +1840,24 @@ def _run_single_dataset(args, dataset_path):
             ivf_params,
         )
         recalls, qps = zip(*res)
+        ivf_style = get_plot_style("IVFFlat Vanilla")
         results_cache["recall_vs_qps"]["runs"].append(
-            ("IVFFlat Vanilla", recalls, qps, "s-")
+            (
+                "IVFFlat Vanilla",
+                recalls,
+                qps,
+                get_plot_style_token("IVFFlat Vanilla"),
+            )
         )
-        plt.plot(recalls, qps, "s-", label="IVFFlat Vanilla")
+        plt.plot(
+            recalls,
+            qps,
+            label="IVFFlat Vanilla",
+            color=ivf_style["color"],
+            linestyle=ivf_style["linestyle"],
+            marker=ivf_style["marker"],
+            alpha=ivf_style["alpha"],
+        )
 
         if args.cross_pollinate and results_store and run_id:
             merged_runs, injected = results_store.cross_pollinate_recall(
@@ -1698,7 +1867,16 @@ def _run_single_dataset(args, dataset_path):
             for name, recalls, qps, style in merged_runs:
                 if name in {"HNSW Vanilla", "IVFFlat Vanilla"}:
                     continue
-                plt.plot(recalls, qps, style, label=f"{name} (history)", alpha=0.6)
+                history_style = get_plot_style(name)
+                plt.plot(
+                    recalls,
+                    qps,
+                    label=f"{name} (history)",
+                    color=history_style["color"],
+                    linestyle=history_style["linestyle"],
+                    marker=history_style["marker"],
+                    alpha=0.6,
+                )
             if injected:
                 print(
                     f"Cross-pollinated recall from history: {', '.join(sorted(injected))}"
@@ -1708,7 +1886,10 @@ def _run_single_dataset(args, dataset_path):
         plt.ylabel("QPS (log scale)")
         plt.yscale("log")
         plt.title(f"Recall vs QPS (K={K}, Dim={DIM})")
-        plt.legend()
+        ax = plt.gca()
+        series_legend = ax.legend(loc="best")
+        ax.add_artist(series_legend)
+        add_semantic_style_legend(ax)
         plt.grid(True)
         recall_path = os.path.join(plot_dir, "recall_vs_qps.svg")
         plt.savefig(recall_path, dpi=DPI)
@@ -1772,8 +1953,8 @@ def _run_single_dataset(args, dataset_path):
         if weaviate:
             externals.append((WeaviateIndex, "Weaviate", hnsw_args))
         # Omitted becasue it takes 30 min (alone) on a small dataset
-        # if qdrant_client:
-        #     externals.append((QdrantIndex, "Qdrant", hnsw_args))
+        if qdrant_client:
+            externals.append((QdrantIndex, "Qdrant", hnsw_args))
         redis_ready, redis_info = redis_benchmark_ready(
             auto_start=args.auto_start_redis
         )
@@ -1893,6 +2074,7 @@ def _run_single_dataset(args, dataset_path):
 
         for name, res in results_cache["throughput"].items():
             external_names = results_cache["external_names"]
+            style_cfg = get_plot_style(name, external_names)
 
             # Check for icon match
             icon_data = None
@@ -1910,7 +2092,15 @@ def _run_single_dataset(args, dataset_path):
 
             if icon_data:
                 img, zoom = icon_data
-                plt.plot(THREAD_COUNTS, res, "--", label=name, alpha=0.75, color=color)
+                plt.plot(
+                    THREAD_COUNTS,
+                    res,
+                    label=name,
+                    alpha=style_cfg["alpha"],
+                    color=style_cfg["color"] if style_cfg["color"] else color,
+                    linestyle=style_cfg["linestyle"],
+                    marker=style_cfg["marker"],
+                )
                 for x, y in zip(THREAD_COUNTS, res):
                     if np.isnan(y):
                         continue
@@ -1918,8 +2108,15 @@ def _run_single_dataset(args, dataset_path):
                     ab = AnnotationBbox(im, (x, y), xycoords="data", frameon=False)
                     ax.add_artist(ab)
             else:
-                style = "*--" if name in external_names else "o-"
-                plt.plot(THREAD_COUNTS, res, style, label=name, alpha=0.75, color=color)
+                plt.plot(
+                    THREAD_COUNTS,
+                    res,
+                    label=name,
+                    alpha=style_cfg["alpha"],
+                    color=style_cfg["color"] if style_cfg["color"] else color,
+                    linestyle=style_cfg["linestyle"],
+                    marker=style_cfg["marker"],
+                )
 
         plt.xlabel("Threads")
         plt.ylabel("Ops/sec")
@@ -1930,7 +2127,9 @@ def _run_single_dataset(args, dataset_path):
             plt.title(
                 f"Throughput (W:{args.rw_ratio:.1f}, R:{1.0 - args.rw_ratio:.1f})"
             )
-        plt.legend()
+        series_legend = ax.legend(loc="best")
+        ax.add_artist(series_legend)
+        add_semantic_style_legend(ax)
         plt.grid(True)
         plt.tight_layout()
         throughput_path = os.path.join(plot_dir, "throughput_scaling.svg")
@@ -1939,17 +2138,29 @@ def _run_single_dataset(args, dataset_path):
 
         # Plot 2: Conflict Rates (Optimistic only)
         plt.figure(figsize=(8, 6))
+        ax = plt.gca()
         has_conflicts = False
         for name, conflicts in results_cache["conflicts"].items():
             if "Opt" in name:
-                plt.plot(THREAD_COUNTS, conflicts, "x--", label=name)
+                style_cfg = get_plot_style(name, results_cache["external_names"])
+                plt.plot(
+                    THREAD_COUNTS,
+                    conflicts,
+                    label=name,
+                    color=style_cfg["color"],
+                    linestyle=style_cfg["linestyle"],
+                    marker="x",
+                    alpha=style_cfg["alpha"],
+                )
                 has_conflicts = True
 
         if has_conflicts:
             plt.xlabel("Threads")
             plt.ylabel("Conflict Rate (%)")
             plt.title("Conflict Rate (Optimistic)")
-            plt.legend()
+            series_legend = ax.legend(loc="best")
+            ax.add_artist(series_legend)
+            add_semantic_style_legend(ax)
             plt.grid(True)
             plt.tight_layout()
             conflict_path = os.path.join(plot_dir, "conflict_rate.svg")

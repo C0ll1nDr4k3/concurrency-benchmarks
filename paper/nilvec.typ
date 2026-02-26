@@ -42,6 +42,7 @@
     stroke: none,
   )[
     #align(center)[
+      #set par(justify: false)
       #text(size: 20pt, weight: "bold", hyphenate: false)[#title]
     ]
 

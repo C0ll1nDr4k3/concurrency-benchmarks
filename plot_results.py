@@ -8,10 +8,20 @@ import matplotlib.pyplot as plt
 from matplotlib.offsetbox import AnnotationBbox, OffsetImage
 
 try:
-    from nilvec.benchmark import COLOR_MAPPING, ICON_MAPPING
+    from nilvec.benchmark import (
+        COLOR_MAPPING,
+        ICON_MAPPING,
+        add_semantic_style_legend,
+        get_plot_style,
+    )
 except ImportError:
     ICON_MAPPING = {}
     COLOR_MAPPING = {}
+    add_semantic_style_legend = None
+
+    def get_plot_style(name, external_names=None):
+        return {"color": None, "linestyle": "-", "marker": "o", "alpha": 0.8}
+
     print("Warning: nilvec not found, icons and colors might be missing")
 
 
@@ -140,15 +150,28 @@ def plot_results(results_db, output_dir="paper/plots", dpi=1200, run_id=None):
     if data["recall_runs"]:
         print("Plotting Recall vs QPS...")
         plt.figure(figsize=(10, 6))
+        ax = plt.gca()
 
         for name, recalls, qps, style in data["recall_runs"]:
-            plt.plot(recalls, qps, style, label=name)
+            style_cfg = get_plot_style(name, data["external_names"])
+            plt.plot(
+                recalls,
+                qps,
+                label=name,
+                color=style_cfg["color"],
+                linestyle=style_cfg["linestyle"],
+                marker=style_cfg["marker"],
+                alpha=style_cfg["alpha"],
+            )
 
         plt.xlabel("Recall")
         plt.ylabel("QPS (log scale)")
         plt.yscale("log")
         plt.title(f"Recall vs QPS (K={data['k']}, Dim={data['dim']})")
-        plt.legend()
+        series_legend = ax.legend(loc="best")
+        ax.add_artist(series_legend)
+        if add_semantic_style_legend is not None:
+            add_semantic_style_legend(ax)
         plt.grid(True)
         out_path = os.path.join(output_dir, "recall_vs_qps.svg")
         plt.savefig(out_path, dpi=dpi)
@@ -174,6 +197,7 @@ def plot_results(results_db, output_dir="paper/plots", dpi=1200, run_id=None):
                     print(f"Could not load icon {path}: {e}")
 
         for name, res in data["throughput"].items():
+            style_cfg = get_plot_style(name, external_names)
             icon_data = None
             for key, (img, zoom) in loaded_icons.items():
                 if key in name:
@@ -188,19 +212,37 @@ def plot_results(results_db, output_dir="paper/plots", dpi=1200, run_id=None):
 
             if icon_data:
                 img, zoom = icon_data
-                plt.plot(thread_counts, res, "--", label=name, alpha=0.75, color=color)
+                plt.plot(
+                    thread_counts,
+                    res,
+                    label=name,
+                    alpha=style_cfg["alpha"],
+                    color=style_cfg["color"] if style_cfg["color"] else color,
+                    linestyle=style_cfg["linestyle"],
+                    marker=style_cfg["marker"],
+                )
                 for x, y in zip(thread_counts, res):
                     im = OffsetImage(img, zoom=zoom)
                     ab = AnnotationBbox(im, (x, y), xycoords="data", frameon=False)
                     ax.add_artist(ab)
             else:
-                style = "*--" if name in external_names else "o-"
-                plt.plot(thread_counts, res, style, label=name, alpha=0.75, color=color)
+                plt.plot(
+                    thread_counts,
+                    res,
+                    label=name,
+                    alpha=style_cfg["alpha"],
+                    color=style_cfg["color"] if style_cfg["color"] else color,
+                    linestyle=style_cfg["linestyle"],
+                    marker=style_cfg["marker"],
+                )
 
         plt.xlabel("Threads")
         plt.ylabel("Ops/sec")
         plt.title(f"Throughput (W:{rw_ratio:.1f}, R:{1.0 - rw_ratio:.1f})")
-        plt.legend()
+        series_legend = ax.legend(loc="best")
+        ax.add_artist(series_legend)
+        if add_semantic_style_legend is not None:
+            add_semantic_style_legend(ax)
         plt.grid(True)
         plt.tight_layout()
         out_path = os.path.join(output_dir, "throughput_scaling.svg")
@@ -212,17 +254,30 @@ def plot_results(results_db, output_dir="paper/plots", dpi=1200, run_id=None):
     if data["conflicts"]:
         print("Plotting Conflict Rates...")
         plt.figure(figsize=(8, 6))
+        ax = plt.gca()
         has_conflicts = False
         for name, conflicts in data["conflicts"].items():
             if "Opt" in name:
-                plt.plot(data["thread_counts"], conflicts, "x--", label=name)
+                style_cfg = get_plot_style(name, data["external_names"])
+                plt.plot(
+                    data["thread_counts"],
+                    conflicts,
+                    label=name,
+                    color=style_cfg["color"],
+                    linestyle=style_cfg["linestyle"],
+                    marker="x",
+                    alpha=style_cfg["alpha"],
+                )
                 has_conflicts = True
 
         if has_conflicts:
             plt.xlabel("Threads")
             plt.ylabel("Conflict Rate (%)")
             plt.title("Conflict Rate (Optimistic)")
-            plt.legend()
+            series_legend = ax.legend(loc="best")
+            ax.add_artist(series_legend)
+            if add_semantic_style_legend is not None:
+                add_semantic_style_legend(ax)
             plt.grid(True)
             plt.tight_layout()
             out_path = os.path.join(output_dir, "conflict_rate.svg")
