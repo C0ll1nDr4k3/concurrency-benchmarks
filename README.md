@@ -1,4 +1,4 @@
-# Concurrent Vector Index Implementations for ANN Search.
+# Increasing Throughput with Concurrency Control for ANN Indexes
 
 ## Requirements
 
