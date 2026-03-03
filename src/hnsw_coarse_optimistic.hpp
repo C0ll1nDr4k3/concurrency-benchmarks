@@ -105,6 +105,11 @@ class HNSWCoarseOptimistic {
       return new_id;
     }
 
+    // Hold global_mutex_ shared during all graph traversal to prevent
+    // use-after-free: emplace_back on vectors_/neighbors_ can reallocate
+    // the backing array, so no reader may be traversing while that happens.
+    std::shared_lock global_read_lock(global_mutex_);
+
     NodeId curr_entry = entry_point_.load(std::memory_order_acquire);
     int curr_max_level = max_level_.load(std::memory_order_acquire);
 
@@ -137,6 +142,8 @@ class HNSWCoarseOptimistic {
       }
     }
 
+    global_read_lock.unlock();
+
     // Update entry point and max level if necessary
     int expected_level = curr_max_level;
     while (new_level > expected_level) {
@@ -165,6 +172,9 @@ class HNSWCoarseOptimistic {
     if (curr_entry == INVALID_NODE) {
       return SearchResult{};
     }
+
+    // Hold global_mutex_ shared to prevent reallocation of vectors_/neighbors_
+    std::shared_lock global_read_lock(global_mutex_);
 
     int curr_max_level = max_level_.load(std::memory_order_acquire);
 
@@ -215,6 +225,7 @@ class HNSWCoarseOptimistic {
   /**
    * @brief Optimistic greedy search within a layer.
    * Retries automatically on version mismatch.
+   * Caller must hold global_mutex_ shared to prevent vector reallocation.
    */
   NodeId optimistic_greedy_search(std::span<const T> query,
                                   NodeId entry_point,
@@ -230,26 +241,14 @@ class HNSWCoarseOptimistic {
       while (improved) {
         improved = false;
 
-        // Check bounds
-        if (current >= neighbors_.size() ||
-            level >= static_cast<int>(neighbors_[current].size())) {
-          break;
-        }
-
-        // Take snapshot of neighbors
-        std::vector<NodeId> neighbor_snapshot;
-        {
-          std::shared_lock lock(layer_states_[level]->mutex);
-          neighbor_snapshot = neighbors_[current][level];
-        }
-
-        size_t num_neighbors = neighbor_snapshot.size();
+        const auto& neighbors = neighbors_[current][level];
+        size_t num_neighbors = neighbors.size();
         for (size_t i = 0; i < num_neighbors; ++i) {
           if (i + 3 < num_neighbors) {
-            __builtin_prefetch(vectors_[neighbor_snapshot[i + 3]].data(), 0, 3);
+            __builtin_prefetch(vectors_[neighbors[i + 3]].data(), 0, 3);
           }
 
-          NodeId neighbor = neighbor_snapshot[i];
+          NodeId neighbor = neighbors[i];
           float neighbor_dist = compute_distance(query, neighbor);
           if (neighbor_dist < current_dist) {
             current = neighbor;

@@ -1,3 +1,5 @@
+#import "@preview/fletcher:0.5.8" as fletcher: diagram, node, edge
+
 #show "University of Colorado Boulder": name => box[
   #box(image(
     "imgs/cu.png",
@@ -80,26 +82,129 @@ This gap motivates our systematic exploration of the concurrency control design 
 
 = Methodology
 
+== Index Implementations
+
+Each index family (IVFFlat and HNSW) is implemented with four concurrency strategies drawn from the cross-product of two axes: locking granularity (coarse vs. fine) and conflict resolution (pessimistic vs. optimistic).
+
+#figure(
+  diagram(
+    node-stroke: .65pt,
+    edge-stroke: .65pt,
+    spacing: (9mm, 14mm),
+
+    // ── Annotation nodes ─────────────────────────────────────────────
+    node(
+      (-0.6, 0.5),
+      align(right, text(size: 7.5pt, fill: blue.darken(30%))[
+        `search()` \
+        shared_lock
+      ]),
+      stroke: none,
+      name: <rdr>,
+    ),
+    node(
+      (3.6, 0.5),
+      align(left, text(size: 7.5pt, fill: red.darken(30%))[
+        `insert()` \
+        unique_lock
+      ]),
+      stroke: none,
+      name: <wtr>,
+    ),
+
+    // ── Per-bucket mutex nodes ───────────────────────────────────────
+    node(
+      (0, 0.5),
+      text(size: 8pt)[`shared_mutex`],
+      fill: red.lighten(80%),
+      stroke: red.darken(20%) + .8pt,
+      name: <mtx0>,
+      inset: 5pt,
+    ),
+    node(
+      (1.2, 0.5),
+      text(size: 8pt)[`shared_mutex`],
+      fill: red.lighten(80%),
+      stroke: red.darken(20%) + .8pt,
+      name: <mtx1>,
+      inset: 5pt,
+    ),
+    node(
+      (2.4, 0.5),
+      text(size: 8pt)[`shared_mutex`],
+      fill: red.lighten(80%),
+      stroke: red.darken(20%) + .8pt,
+      name: <mtx2>,
+      inset: 5pt,
+    ),
+
+    edge(<rdr>, <mtx0>, "->", stroke: blue.darken(20%) + .6pt),
+    edge(<wtr>, <mtx2>, "->", stroke: red.darken(20%) + .6pt),
+
+    // ── Cluster cells ─────────────────────────────────────────────────
+    node(
+      (0, 2),
+      align(center)[
+        *Cluster 0* \
+        #v(2pt)
+        #text(size: 8pt)[$c_0$] \
+        #text(size: 7.5pt)[v₀, v₃, v₇]
+      ],
+      name: <c0>,
+      inset: 5pt,
+    ),
+    node(
+      (1.2, 2),
+      align(center)[
+        *Cluster 1* \
+        #v(2pt)
+        #text(size: 8pt)[$c_1$] \
+        #text(size: 7.5pt)[v₁, v₅]
+      ],
+      name: <c1>,
+      inset: 5pt,
+    ),
+    node(
+      (2.4, 2),
+      align(center)[
+        *Cluster 2* \
+        #v(2pt)
+        #text(size: 8pt)[$c_2$] \
+        #text(size: 7.5pt)[v₂, v₄, v₆]
+      ],
+      name: <c2>,
+      inset: 5pt,
+    ),
+    node(
+      (3.5, 2),
+      $dots.h.c$,
+      stroke: none,
+      name: <dots>,
+    ),
+
+    // ── Per-bucket mutex → cluster edges ──────────────────────────────
+    edge(<mtx0>, <c0>, "->"),
+    edge(<mtx1>, <c1>, "->"),
+    edge(<mtx2>, <c2>, "->"),
+  ),
+  caption: [
+    IVFFlat coarse pessimistic: each cluster has its own `shared_mutex`.
+    `search()` acquires a shared lock on each probed bucket; `insert()` acquires
+    an exclusive lock only on the target bucket. Writers to different clusters proceed concurrently.
+  ],
+) <fig-ivf-coarse-pess>
+
+== Workload
+
 The benchmarking harness is implemented in Python and invokes the core C++ index implementations through bindings to minimize orchestration overhead.
 
-The primary workload consists of a concurrent mix of document insertions and approximate nearest neighbor searches. The write ratio ramps linearly from 1% to 5% as thread count increases from 2 to 16, so that contention pressure grows alongside parallelism. We vary the number of concurrent worker threads from 2 to 16 to observe the scaling behavior of each index implementation.
+The primary workload consists of a concurrent mix of document insertions and approximate nearest neighbor searches. The write ratio ramps linearly from 1% to 5% as thread count increases from 2 to 24, so that contention pressure grows alongside parallelism. We vary the number of concurrent worker threads across seven points -- 2, 4, 8, 12, 16, 20, and 24 -- spanning the full physical core count of the test machine and capturing behavior through the E-core saturation region into combined P+E load.
 
 Standard database benchmarks model production workloads as overwhelmingly read-heavy. YCSB Workload B (95% read, 5% update) and Workload D (95% read, 5% insert) represent the read-mostly tier of the Yahoo! Cloud Serving Benchmark suite @cooper2010ycsb, and even the "update-heavy" Workload A allocates only 50% of operations to writes. Production vector databases skew further toward reads: ingestion is typically batched or periodic, while queries arrive continuously. Our 1--5% write range falls within this production regime. However, our goal is to stress concurrency control mechanisms, not to replicate a particular deployment profile. By ramping the write ratio across thread counts, we ensure that write-write and read-write conflicts increase with parallelism, exposing scaling bottlenecks that a fixed low write ratio would mask at higher thread counts.
 
-Reported in this paper:
+We evaluate our implementations using the SIFT-128 @annbench_sift128, Fashion-MNIST-784 @annbench_fashion784 @xiao2017fashionmnist, GloVe @annbench_glove100 @annbench_glove25, GIST-960 @annbench_gist960, NYTimes-256 @annbench_nytimes256, and MNIST-784 @annbench_mnist784 datasets.
 
-- SIFT-128 Euclidean: 1,000,000 training vectors and 10,000 query vectors, with dimensionality $d=128$ @annbench_sift128.
-- Fashion-MNIST-784 Euclidean: 60,000 training vectors and 10,000 query vectors, with dimensionality $d=784$ @annbench_fashion784 @xiao2017fashionmnist.
-
-Configured in the benchmark harness (not yet reported in this paper):
-
-- GloVe-100 Angular: 1,183,514 training vectors and 10,000 query vectors, with dimensionality $d=100$ @annbench_glove100.
-- GloVe-25 Angular: 1,183,514 training vectors and 10,000 query vectors, with dimensionality $d=25$ @annbench_glove25.
-- GIST-960 Euclidean: 1,000,000 training vectors and 1,000 query vectors, with dimensionality $d=960$ @annbench_gist960.
-- NYTimes-256 Angular: 290,000 training vectors and 10,000 query vectors, with dimensionality $d=256$ @annbench_nytimes256.
-- MNIST-784 Euclidean: 60,000 training vectors and 10,000 query vectors, with dimensionality $d=784$ @annbench_mnist784.
-
-All experiments were conducted on a Lenovo Legion Pro 7i 16IAX10H with an Intel Core Ultra 9 275HX CPU (24 total cores: 8P+16E) and 32 GiB RAM.
+All experiments were conducted on a Lenovo Legion Pro 7i 16IAX10H with an Intel Core Ultra 9 275HX CPU (24 total cores: 8P+16E) and 32 GiB RAM. Our evaluation is restricted to CPU-based architectures to maintain a direct comparison between our custom concurrency control strategies. Although GPU-acceleration is a common optimization for batch ANN search, implementing our proposed fine-grained locking and optimistic retry mechanisms within GPU kernels involves significant architectural complexity that we reserve for future work.
 
 = Results
 
@@ -130,8 +235,6 @@ Incidentally, the lower a dataset's throughput, the higher is cluster density.
 = Discussion
 
 - *_Why hasn't this been done before?_* The predominant paradigm has been offline construction followed by read-only serving, so reader-writer concurrency at the index level simply never arose. Systems that do accept writes typically side-step the problem architecturally: mutable segments are flushed to read-only storage on a rolling basis, and searches hit only sealed data @wang2021milvus. Deletions are handled similarly via tombstoning followed by periodic rebuilds rather than in-place graph repair @pinecone2023hnsw. Streaming workloads driven by retrieval-augmented generation @lewis2020rag have only recently made in-place concurrent update a practical consideration.
-
-- *_Why weren't GPU-accelerated indexes included?_* GPU-accelerated indexes we save for a future study and later revision, as that would entail writing GPU accelerations for our own implementations.
 
 - *_Why does HNSW degrade more under concurrent writes than IVF?_* The answer lies in a structural asymmetry between the two index types. HNSW is a navigable small-world graph: its search correctness depends on the graph remaining well-connected across layers @malkov2020hnsw. During insertion, a new node is wired into the graph by selecting neighbors via a heuristic and then back-linking those neighbors to the new node @malkov2020hnsw. Under concurrent writes, these two steps are not atomic. A racing writer can observe a partially-linked node, traverse a stale edge, or have its own neighbor list pruned before its back-links are established, any of which can leave the graph with weakly connected or entirely isolated nodes. Heuristics like deferred or batched pruning reduce the frequency of such breaks but cannot eliminate them: they trade recall loss for throughput, rather than recovering the full structural guarantee. IVF does not share this vulnerability. At the coarse quantizer level, cluster assignment is a read-only operation; inserting a vector into a cluster appends to a list and requires only a per-cluster lock @douze2024faiss. Concurrent writers targeting different clusters are entirely independent, and even writers within the same cluster contend only on a flat append structure with no graph invariant to preserve. The degradation seen in HNSW throughput and recall under high write concurrency is therefore not merely an implementation artifact; it reflects a fundamental tension between the graph connectivity invariant that makes HNSW fast and the atomicity that concurrent mutation requires.
 

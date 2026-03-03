@@ -1,10 +1,12 @@
 /**
  * @file ivfflat_coarse_optimistic.hpp
- * @brief IVFFlat implementation with coarse-grained optimistic concurrency.
+ * @brief IVFFlat implementation with per-bucket optimistic concurrency.
  *
- * Uses version-based optimistic concurrency at the index level:
- * - Searches proceed without locks, validating version at the end
- * - Insertions use versioning to detect conflicts
+ * Uses version-based optimistic concurrency at the bucket level:
+ * - Each bucket has its own version counter (odd = write in progress)
+ * - Searches validate per-bucket versions after scanning each bucket
+ * - On conflict, the full search is retried; on max retries, falls back
+ *   to per-bucket shared locks
  */
 
 #pragma once
@@ -12,6 +14,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <memory>
 #include <mutex>
 #include <numeric>
 #include <shared_mutex>
@@ -21,7 +24,7 @@
 namespace nilvec {
 
 /**
- * @brief IVFFlat index with coarse-grained optimistic locking.
+ * @brief IVFFlat index with per-bucket optimistic locking.
  */
 template <typename T>
 class IVFFlatCoarseOptimistic {
@@ -37,23 +40,28 @@ class IVFFlatCoarseOptimistic {
         nlist_(nlist),
         nprobe_(nprobe),
         trained_(false),
-        version_(0),
         max_retries_(max_retries),
         rng_(std::random_device{}()) {
     buckets_.resize(nlist_);
+    bucket_versions_ =
+        std::make_unique<std::atomic<uint64_t>[]>(nlist_);  // NOLINT
+    bucket_mutexes_ = std::make_unique<std::mutex[]>(nlist_);  // NOLINT
+    fallback_mutexes_ =
+        std::make_unique<std::shared_mutex[]>(nlist_);  // NOLINT
+    for (size_t i = 0; i < nlist_; ++i) {
+      bucket_versions_[i].store(0, std::memory_order_relaxed);
+    }
   }
 
   /**
    * @brief Train the index (exclusive operation).
    */
   void train(const std::vector<std::vector<T>>& training_data) {
-    std::unique_lock lock(write_mutex_);
+    std::unique_lock lock(train_mutex_);
 
     if (training_data.empty()) {
       return;
     }
-
-    version_.fetch_add(1, std::memory_order_release);
 
     centroids_ = kmeans_plusplus_init(training_data);
 
@@ -92,98 +100,43 @@ class IVFFlatCoarseOptimistic {
     }
 
     trained_ = true;
-    version_.fetch_add(1, std::memory_order_release);
   }
 
   /**
-   * @brief Insert a vector with optimistic concurrency.
+   * @brief Insert a vector with per-bucket optimistic concurrency.
    */
   NodeId insert(std::span<const T> data) {
     assert(data.size() == dim_);
     assert(trained_);
 
-    std::unique_lock lock(write_mutex_);
-
-    version_.fetch_add(1, std::memory_order_release);
-
-    NodeId new_id = static_cast<NodeId>(vectors_.size());
-    vectors_.emplace_back(data.begin(), data.end());
+    NodeId new_id;
+    {
+      std::unique_lock lock(vectors_mutex_);
+      new_id = static_cast<NodeId>(vectors_.size());
+      vectors_.emplace_back(data.begin(), data.end());
+    }
 
     size_t bucket = find_nearest_centroid(data);
-    buckets_[bucket].push_back(new_id);
 
-    version_.fetch_add(1, std::memory_order_release);
+    {
+      std::unique_lock lock(bucket_mutexes_[bucket]);
+      bucket_versions_[bucket].fetch_add(1, std::memory_order_release);
+      buckets_[bucket].push_back(new_id);
+      bucket_versions_[bucket].fetch_add(1, std::memory_order_release);
+    }
 
     return new_id;
   }
 
   /**
-   * @brief Search with optimistic concurrency (retry on conflict).
+   * @brief Search with per-bucket optimistic concurrency (retry on conflict).
    */
   SearchResult search(std::span<const T> query, size_t k) const {
-    for (size_t retry = 0; retry < max_retries_; ++retry) {
-      NILVEC_TRACK_SEARCH_ATTEMPT(conflict_stats_);
-      uint64_t version_before = version_.load(std::memory_order_acquire);
-
-      // Odd version means write in progress
-      if (version_before & 1) {
-        NILVEC_TRACK_SEARCH_CONFLICT(conflict_stats_);
-        continue;
-      }
-
-      if (!trained_ || vectors_.empty()) {
-        return SearchResult{};
-      }
-
-      auto result = search_internal(query, k);
-
-      uint64_t version_after = version_.load(std::memory_order_acquire);
-      if (version_before == version_after) {
-        return result;
-      }
-      NILVEC_TRACK_SEARCH_CONFLICT(conflict_stats_);
+    if (!trained_) {
+      return SearchResult{};
     }
 
-    // Fallback to pessimistic
-    NILVEC_TRACK_SEARCH_ATTEMPT(conflict_stats_);
-    std::shared_lock lock(fallback_mutex_);
-    return search_internal(query, k);
-  }
-
-  size_t size() const {
-    uint64_t v;
-    size_t s;
-    do {
-      v = version_.load(std::memory_order_acquire);
-      if (v & 1)
-        continue;
-      s = vectors_.size();
-    } while (v != version_.load(std::memory_order_acquire));
-    return s;
-  }
-
-  bool is_trained() const { return trained_; }
-
-  void set_nprobe(size_t nprobe) {
-    std::unique_lock lock(write_mutex_);
-    nprobe_ = std::min(nprobe, nlist_);
-  }
-
-  size_t nlist() const { return nlist_; }
-
-  /**
-   * @brief Get conflict statistics (only meaningful if NILVEC_TRACK_CONFLICTS
-   * is defined).
-   */
-  const ConflictStats& conflict_stats() const { return conflict_stats_; }
-
-  /**
-   * @brief Reset conflict statistics.
-   */
-  void reset_conflict_stats() { conflict_stats_.reset(); }
-
- private:
-  SearchResult search_internal(std::span<const T> query, size_t k) const {
+    // Centroid comparison is lock-free (centroids immutable after training)
     std::vector<Candidate> centroid_candidates;
     centroid_candidates.reserve(nlist_);
     for (size_t c = 0; c < nlist_; ++c) {
@@ -196,21 +149,88 @@ class IVFFlatCoarseOptimistic {
                           std::min(nprobe_, centroid_candidates.size()),
                       centroid_candidates.end());
 
-    MaxHeap results;
-    for (size_t i = 0; i < std::min(nprobe_, centroid_candidates.size()); ++i) {
-      size_t bucket_idx = centroid_candidates[i].id;
-      const auto& bucket_vecs = buckets_[bucket_idx];
-      size_t bucket_size = bucket_vecs.size();
+    size_t probe_count = std::min(nprobe_, centroid_candidates.size());
 
-      for (size_t j = 0; j < bucket_size; ++j) {
-        if (j + 4 < bucket_size) {
-          NodeId prefetch_id = bucket_vecs[j + 4];
-          if (prefetch_id < vectors_.size()) {
-            __builtin_prefetch(vectors_[prefetch_id].data(), 0, 3);
+    for (size_t retry = 0; retry < max_retries_; ++retry) {
+      NILVEC_TRACK_SEARCH_ATTEMPT(conflict_stats_);
+
+      // Snapshot per-bucket versions before reading
+      bool conflict = false;
+
+      // Hold vectors lock shared for the scan pass
+      std::shared_lock vec_lock(vectors_mutex_);
+
+      if (vectors_.empty()) {
+        return SearchResult{};
+      }
+
+      MaxHeap results;
+      for (size_t i = 0; i < probe_count; ++i) {
+        size_t bucket_idx = centroid_candidates[i].id;
+
+        uint64_t ver_before =
+            bucket_versions_[bucket_idx].load(std::memory_order_acquire);
+        if (ver_before & 1) {
+          conflict = true;
+          break;
+        }
+
+        const auto& bucket_vecs = buckets_[bucket_idx];
+        size_t bucket_size = bucket_vecs.size();
+
+        for (size_t j = 0; j < bucket_size; ++j) {
+          if (j + 4 < bucket_size) {
+            NodeId prefetch_id = bucket_vecs[j + 4];
+            if (prefetch_id < vectors_.size()) {
+              __builtin_prefetch(vectors_[prefetch_id].data(), 0, 3);
+            }
+          }
+
+          NodeId vec_id = bucket_vecs[j];
+          if (vec_id >= vectors_.size())
+            continue;
+
+          float dist =
+              squared_distance(query, std::span<const T>(vectors_[vec_id]));
+
+          if (results.size() < k || dist < results.top().distance) {
+            results.push({vec_id, dist});
+            if (results.size() > k) {
+              results.pop();
+            }
           }
         }
 
-        NodeId vec_id = bucket_vecs[j];
+        uint64_t ver_after =
+            bucket_versions_[bucket_idx].load(std::memory_order_acquire);
+        if (ver_before != ver_after) {
+          conflict = true;
+          break;
+        }
+      }
+
+      if (conflict) {
+        NILVEC_TRACK_SEARCH_CONFLICT(conflict_stats_);
+        continue;
+      }
+
+      return collect_results(results);
+    }
+
+    // Fallback: pessimistic per-bucket shared locks
+    NILVEC_TRACK_SEARCH_ATTEMPT(conflict_stats_);
+    std::shared_lock vec_lock(vectors_mutex_);
+
+    if (vectors_.empty()) {
+      return SearchResult{};
+    }
+
+    MaxHeap results;
+    for (size_t i = 0; i < probe_count; ++i) {
+      size_t bucket_idx = centroid_candidates[i].id;
+      std::shared_lock bkt_lock(fallback_mutexes_[bucket_idx]);
+
+      for (NodeId vec_id : buckets_[bucket_idx]) {
         if (vec_id >= vectors_.size())
           continue;
 
@@ -226,6 +246,33 @@ class IVFFlatCoarseOptimistic {
       }
     }
 
+    return collect_results(results);
+  }
+
+  size_t size() const {
+    std::shared_lock lock(vectors_mutex_);
+    return vectors_.size();
+  }
+
+  bool is_trained() const { return trained_; }
+
+  void set_nprobe(size_t nprobe) { nprobe_ = std::min(nprobe, nlist_); }
+
+  size_t nlist() const { return nlist_; }
+
+  /**
+   * @brief Get conflict statistics (only meaningful if NILVEC_TRACK_CONFLICTS
+   * is defined).
+   */
+  const ConflictStats& conflict_stats() const { return conflict_stats_; }
+
+  /**
+   * @brief Reset conflict statistics.
+   */
+  void reset_conflict_stats() { conflict_stats_.reset(); }
+
+ private:
+  SearchResult collect_results(MaxHeap& results) const {
     SearchResult result;
     std::vector<Candidate> sorted_results;
     sorted_results.reserve(results.size());
@@ -311,15 +358,22 @@ class IVFFlatCoarseOptimistic {
   size_t nlist_;
   size_t nprobe_;
   bool trained_;
-  std::atomic<uint64_t> version_;
   size_t max_retries_;
 
   std::vector<std::vector<float>> centroids_;
   std::vector<std::vector<NodeId>> buckets_;
   std::vector<std::vector<T>> vectors_;
 
-  mutable std::mutex write_mutex_;
-  mutable std::shared_mutex fallback_mutex_;
+  // Per-bucket versioning (odd = write in progress)
+  std::unique_ptr<std::atomic<uint64_t>[]>
+      bucket_versions_;  // NOLINT(modernize-avoid-c-arrays)
+  std::unique_ptr<std::mutex[]>
+      bucket_mutexes_;  // NOLINT(modernize-avoid-c-arrays)
+  std::unique_ptr<std::shared_mutex[]>
+      fallback_mutexes_;  // NOLINT(modernize-avoid-c-arrays)
+
+  mutable std::mutex train_mutex_;
+  mutable std::shared_mutex vectors_mutex_;
   mutable ConflictStats conflict_stats_;
   mutable std::mt19937 rng_;
 };

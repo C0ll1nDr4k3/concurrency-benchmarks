@@ -3,7 +3,7 @@ import pytest
 
 nilvec = pytest.importorskip(
     "nilvec",
-    reason="nilvec not importable — run `meson compile -C builddir` first",
+    reason="nilvec not importable - run `meson compile -C builddir` first",
 )
 
 

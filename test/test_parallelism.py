@@ -12,7 +12,7 @@ import pytest
 
 nilvec = pytest.importorskip(
     "nilvec._nilvec",
-    reason="nilvec C++ extension not importable — run `meson compile -C builddir` first",
+    reason="nilvec C++ extension not importable - run `meson compile -C builddir` first",
 )
 
 NUM_THREADS = min(2, multiprocessing.cpu_count())
@@ -73,7 +73,7 @@ def test_gil_released_during_insert():
     serialised_upper = NUM_THREADS * single_time
     assert multi_time < serialised_upper * 0.95, (
         f"Insert: multi-thread time {multi_time:.3f}s is not meaningfully below "
-        f"the GIL-serialised upper bound {serialised_upper:.3f}s — "
+        f"the GIL-serialised upper bound {serialised_upper:.3f}s - "
         f"GIL may not be released during insert()"
     )
 
@@ -110,6 +110,6 @@ def test_gil_released_during_search():
     serialised_upper = NUM_THREADS * single_time
     assert multi_time < serialised_upper * 0.70, (
         f"Search: multi-thread time {multi_time:.3f}s is not meaningfully below "
-        f"the GIL-serialised upper bound {serialised_upper:.3f}s — "
+        f"the GIL-serialised upper bound {serialised_upper:.3f}s - "
         f"GIL may not be released during search()"
     )

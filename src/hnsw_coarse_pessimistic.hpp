@@ -97,6 +97,12 @@ class HNSWCoarsePessimistic {
       return new_id;
     }
 
+    // Hold global_mutex_ shared during all graph traversal to prevent
+    // use-after-free: emplace_back on vectors_/neighbors_ can reallocate
+    // the backing array, so no reader may be traversing while that happens.
+    // The allocation phase above holds it exclusive, so this is safe.
+    std::shared_lock global_read_lock(global_mutex_);
+
     NodeId curr_entry = entry_point_.load(std::memory_order_acquire);
     int curr_max_level = max_level_.load(std::memory_order_acquire);
 
@@ -138,6 +144,8 @@ class HNSWCoarsePessimistic {
       }
     }
 
+    global_read_lock.unlock();
+
     // Update entry point and max level if necessary (atomic)
     int expected_level = curr_max_level;
     while (new_level > expected_level) {
@@ -166,6 +174,9 @@ class HNSWCoarsePessimistic {
     if (curr_entry == INVALID_NODE) {
       return SearchResult{};
     }
+
+    // Hold global_mutex_ shared to prevent reallocation of vectors_/neighbors_
+    std::shared_lock global_read_lock(global_mutex_);
 
     int curr_max_level = max_level_.load(std::memory_order_acquire);
 

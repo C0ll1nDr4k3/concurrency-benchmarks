@@ -2,15 +2,17 @@
  * @file ivfflat_coarse_pessimistic.hpp
  * @brief IVFFlat implementation with coarse-grained pessimistic concurrency.
  *
- * Uses a single read-write lock for the entire index.
- * - Readers acquire shared lock
- * - Writers acquire exclusive lock
+ * Uses per-cluster read-write locks with coarse hold durations:
+ * - Searches hold the bucket lock for the full scan (no snapshot/copy)
+ * - Insertions lock the vector store, then the target bucket
+ * - Centroids are immutable after training
  */
 
 #pragma once
 
 #include <algorithm>
 #include <cassert>
+#include <memory>
 #include <mutex>
 #include <numeric>
 #include <shared_mutex>
@@ -38,13 +40,15 @@ class IVFFlatCoarsePessimistic {
         trained_(false),
         rng_(std::random_device{}()) {
     buckets_.resize(nlist_);
+    bucket_mutexes_ = std::make_unique<std::shared_mutex[]>(
+        nlist_);  // NOLINT(modernize-avoid-c-arrays)
   }
 
   /**
-   * @brief Train the index (requires exclusive lock).
+   * @brief Train the index (exclusive, single-threaded).
    */
   void train(const std::vector<std::vector<T>>& training_data) {
-    std::unique_lock lock(mutex_);
+    std::unique_lock lock(train_mutex_);
 
     if (training_data.empty()) {
       return;
@@ -90,32 +94,43 @@ class IVFFlatCoarsePessimistic {
   }
 
   /**
-   * @brief Insert a vector (requires exclusive lock).
+   * @brief Insert a vector (locks vector store, then target bucket).
    */
   NodeId insert(std::span<const T> data) {
-    std::unique_lock lock(mutex_);
     assert(data.size() == dim_);
     assert(trained_);
 
-    NodeId new_id = static_cast<NodeId>(vectors_.size());
-    vectors_.emplace_back(data.begin(), data.end());
+    NodeId new_id;
+    {
+      std::unique_lock lock(vectors_mutex_);
+      new_id = static_cast<NodeId>(vectors_.size());
+      vectors_.emplace_back(data.begin(), data.end());
+    }
 
     size_t bucket = find_nearest_centroid(data);
-    buckets_[bucket].push_back(new_id);
+
+    {
+      std::unique_lock lock(bucket_mutexes_[bucket]);
+      buckets_[bucket].push_back(new_id);
+    }
 
     return new_id;
   }
 
   /**
-   * @brief Search for k nearest neighbors (shared lock).
+   * @brief Search for k nearest neighbors (per-cluster shared locks).
+   *
+   * Holds vectors_mutex_ shared for the entire search pass and each
+   * bucket lock shared for the full scan of that bucket. This "coarse"
+   * hold duration avoids snapshot copies but blocks writers longer than
+   * the fine-grained variant.
    */
   SearchResult search(std::span<const T> query, size_t k) const {
-    std::shared_lock lock(mutex_);
-
-    if (!trained_ || vectors_.empty()) {
+    if (!trained_) {
       return SearchResult{};
     }
 
+    // Centroid comparison is lock-free (centroids immutable after training)
     std::vector<Candidate> centroid_candidates;
     centroid_candidates.reserve(nlist_);
     for (size_t c = 0; c < nlist_; ++c) {
@@ -128,9 +143,20 @@ class IVFFlatCoarsePessimistic {
                           std::min(nprobe_, centroid_candidates.size()),
                       centroid_candidates.end());
 
+    // Hold vectors lock for the entire search pass
+    std::shared_lock vec_lock(vectors_mutex_);
+
+    if (vectors_.empty()) {
+      return SearchResult{};
+    }
+
     MaxHeap results;
     for (size_t i = 0; i < std::min(nprobe_, centroid_candidates.size()); ++i) {
       size_t bucket_idx = centroid_candidates[i].id;
+
+      // Hold bucket lock for the full scan of this bucket
+      std::shared_lock bkt_lock(bucket_mutexes_[bucket_idx]);
+
       for (NodeId vec_id : buckets_[bucket_idx]) {
         float dist =
             squared_distance(query, std::span<const T>(vectors_[vec_id]));
@@ -164,19 +190,13 @@ class IVFFlatCoarsePessimistic {
   }
 
   size_t size() const {
-    std::shared_lock lock(mutex_);
+    std::shared_lock lock(vectors_mutex_);
     return vectors_.size();
   }
 
-  bool is_trained() const {
-    std::shared_lock lock(mutex_);
-    return trained_;
-  }
+  bool is_trained() const { return trained_; }
 
-  void set_nprobe(size_t nprobe) {
-    std::unique_lock lock(mutex_);
-    nprobe_ = std::min(nprobe, nlist_);
-  }
+  void set_nprobe(size_t nprobe) { nprobe_ = std::min(nprobe, nlist_); }
 
   size_t nlist() const { return nlist_; }
 
@@ -252,7 +272,10 @@ class IVFFlatCoarsePessimistic {
   std::vector<std::vector<NodeId>> buckets_;
   std::vector<std::vector<T>> vectors_;
 
-  mutable std::shared_mutex mutex_;
+  mutable std::mutex train_mutex_;
+  mutable std::shared_mutex vectors_mutex_;
+  std::unique_ptr<std::shared_mutex[]>
+      bucket_mutexes_;  // NOLINT(modernize-avoid-c-arrays)
   mutable std::mt19937 rng_;
 };
 

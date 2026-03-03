@@ -2,11 +2,11 @@
 
 ## Requirements
 
-*   **C++ Compiler**: GCC or Clang with C++17 support.
-*   **Build System**: Meson and Ninja.
-*   **Python**: Python 3.12+
-*   **Package Manager**: `uv` (recommended) or `pip`.
-*   **Libraries**: OpenMP (optional, for some baselines), HDF5 (for reading datasets).
+- **C++ Compiler**: GCC or Clang with C++17 support.
+- **Build System**: Meson and Ninja.
+- **Python**: Python 3.12+
+- **Package Manager**: `uv` (recommended) or `pip`.
+- **Libraries**: OpenMP (optional, for some baselines), HDF5 (for reading datasets).
 
 ## Installation
 
@@ -25,24 +25,8 @@ pip install "git+https://github.com/C0ll1nDr4k3/concurrency-benchmarks.git#egg=n
 
 ## Setup (For Development)
 
-1.  **Install Python Dependencies**:
-    ```bash
-    # Basic dependencies only
-    uv pip install -e .
-
-    # With external benchmarks (FAISS, USearch, Milvus, etc.)
-    uv pip install -e ".[external]"
-
-    # With development tools (pytest, etc.)
-    uv pip install -e ".[dev]"
-
-    # Everything (recommended for development)
-    uv pip install -e ".[full]"
-    ```
-
-2.  **Prepare Data**:
+1.  **Prepare Data**:
     The benchmark script automatically downloads the dataset (`data/sift-128-euclidean.hdf5`) if it is missing.
-
 
 ## Building
 
@@ -58,18 +42,19 @@ meson compile -C builddir
 
 > [!WARNING]
 > On Windows, If you encounter `LNK1104: cannot open file 'kernel32.lib'`, first try running the build commands from a "x64 Native Tools Command Prompt for VS 2022" or manually activate the environment:
+>
 > ```cmd
 > call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
 > uv sync
 > ```
 >
 > If the error persists, it usually means the Windows SDK is missing or corrupted. To fix this:
+>
 > 1. Open **Visual Studio Installer**.
 > 2. Click **Modify** on your VS 2022 installation.
 > 3. Under **Workloads**, ensure **Desktop development with C++** is checked.
 > 4. In the **Installation details** sidebar on the right, ensure a **Windows 10 SDK** or **Windows 11 SDK** version (e.g., `10.0.xxxxx.x`) is checked.
 > 5. Click **Modify** to install the missing components.
-
 
 ## Running Benchmarks
 
@@ -105,6 +90,7 @@ NilVec supports two concurrency modes for benchmarking: **threading** (default) 
 ### Threading Mode (Default)
 
 NilVec's Python bindings release the GIL (Global Interpreter Lock) for all performance-critical operations:
+
 - `insert()` - GIL released during vector insertion
 - `search()` - GIL released during k-NN search
 - `train()` - GIL released during k-means training
@@ -112,6 +98,7 @@ NilVec's Python bindings release the GIL (Global Interpreter Lock) for all perfo
 This enables true multicore parallelism when using Python's `threading` module, allowing multiple threads to execute C++ code simultaneously on different CPU cores.
 
 **Verify GIL release:**
+
 ```bash
 uv run pytest test/test_gil_release.py -v
 ```
@@ -119,6 +106,7 @@ uv run pytest test/test_gil_release.py -v
 Expected output: ~3-4x speedup with 4 threads, confirming parallel execution.
 
 **Run threading benchmarks:**
+
 ```bash
 # Threading mode (default)
 uv run python -m nilvec.benchmark
@@ -132,18 +120,21 @@ uv run python -m nilvec.benchmark --mode threading
 For scenarios requiring complete process isolation, NilVec supports multiprocessing mode where each process creates its own independent index instance.
 
 **Run multiprocessing benchmarks:**
+
 ```bash
 # Multiprocessing mode
 uv run python -m nilvec.benchmark --mode multiprocessing
 ```
 
 Each process:
+
 - Creates its own index instance
 - Operates on a partition of the data
 - Reports throughput independently
 - Results are aggregated in the parent process
 
 **Use cases:**
+
 - Validating threading performance
 - Testing deployment with multiple index instances
 - Avoiding any potential GIL contention in Python layer
@@ -165,6 +156,7 @@ This generates plots showing both threading and multiprocessing throughput on th
 **Expected Results:**
 
 Threading should match or exceed multiprocessing performance because:
+
 - GIL is properly released for C++ operations
 - No inter-process communication overhead
 - Shared memory access is more efficient
@@ -191,26 +183,31 @@ Latest committed benchmark figures:
 ### Throughput Scaling
 
 #### SIFT-128 Euclidean (full)
-![Throughput Scaling — SIFT-128 (full)](paper/plots/sift-128-euclidean_full/throughput_scaling.svg)
+
+![Throughput Scaling - SIFT-128 (full)](paper/plots/sift-128-euclidean_full/throughput_scaling.svg)
 
 #### Fashion-MNIST-784 Euclidean (full)
-![Throughput Scaling — Fashion-MNIST-784 (full)](paper/plots/fashion-mnist-784-euclidean_full/throughput_scaling.svg)
+
+![Throughput Scaling - Fashion-MNIST-784 (full)](paper/plots/fashion-mnist-784-euclidean_full/throughput_scaling.svg)
 
 ### Recall vs QPS
+
 ![Latest Recall vs QPS](paper/plots/recall_vs_qps.svg)
 Recall vs. QPS.
 
 ### Conflict Rate
 
 #### SIFT-128 Euclidean (full)
-![Conflict Rate — SIFT-128 (full)](paper/plots/sift-128-euclidean_full/conflict_rate.svg)
+
+![Conflict Rate - SIFT-128 (full)](paper/plots/sift-128-euclidean_full/conflict_rate.svg)
 
 #### Fashion-MNIST-784 Euclidean (full)
-![Conflict Rate — Fashion-MNIST-784 (full)](paper/plots/fashion-mnist-784-euclidean_full/conflict_rate.svg)
+
+![Conflict Rate - Fashion-MNIST-784 (full)](paper/plots/fashion-mnist-784-euclidean_full/conflict_rate.svg)
 
 ## Testing
 
-```bash
+````bash
 export PYTHONPATH=$PYTHONPATH:$(pwd)/builddir
 uv run pytest
 
@@ -218,8 +215,12 @@ uv run pytest
 
 ```bash
 clang-format -i **/*.cpp **/*.hpp && uv format
-```
+````
 
 ## Paper
+
 typst watch paper/nilvec.typ --open
+
+```
+
 ```

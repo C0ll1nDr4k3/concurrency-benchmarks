@@ -79,7 +79,7 @@ DPI = 1200
 RW_RATIO = 0.1
 
 # Thread counts to test
-THREAD_COUNTS = [2**n for n in range(1, 5)]
+THREAD_COUNTS = [2, 4, 8, 12, 16, 20, 24]
 
 
 def parse_rw_bands(band_strs):
