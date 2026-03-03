@@ -47,7 +47,7 @@ clang-format -i **/*.cpp **/*.hpp && uv format
 uv run main.py --dataset data/sift-128-euclidean.hdf5               # full run
 uv run main.py --dataset data/sift-128-euclidean.hdf5 --skip-recall  # throughput only
 uv run main.py --dataset data/sift-128-euclidean.hdf5 --skip-recall --limit 1000  # quick test
-uv run python -m nilvec.benchmark --mode both  # threading vs multiprocessing comparison
+uv run python main.py --mode both  # threading vs multiprocessing comparison
 ```
 
 ## Paper
@@ -78,13 +78,13 @@ Index families:
 
 `common.hpp` contains shared types (`NodeId`, `Candidate`, `SearchResult`, `ConflictStats`), SIMD-accelerated distance functions (AVX2/NEON), and conflict tracking macros (compiled in when `-DNILVEC_TRACK_CONFLICTS` is set via the `track_conflicts` meson option).
 
-### Python Bindings (`src/python_bindings.cpp`)
+### Python Bindings (src/python_bindings.cpp)
 
-pybind11 module `_nilvec`. All performance-critical methods (`insert`, `search`, `train`) release the GIL via `py::call_guard<py::gil_scoped_release>()`, enabling true multithreaded parallelism from Python.
+pybind11 module `_nilvec`. All performance-critical methods (`insert`, `search`, `train`) release the GIL via `py::call_guard<py::gil_scoped_release>()`, enabling true multithreaded parallelism from Python. The shim `nilvec.py` at the root directory handles loading this extension.
 
-### Benchmark Framework (`nilvec/benchmark.py`)
+### Benchmark Framework (main.py)
 
-`nilvec/benchmark.py` is the main benchmark driver. It:
+`main.py` is the main benchmark driver. It:
 
 - Wraps external libraries (FAISS, USearch, Milvus, Weaviate, Redis) in a common interface
 - Runs throughput-vs-threads and recall-vs-QPS benchmarks

@@ -11,7 +11,7 @@ import multiprocessing
 import pytest
 
 nilvec = pytest.importorskip(
-    "nilvec._nilvec",
+    "_nilvec",
     reason="nilvec C++ extension not importable - run `meson compile -C builddir` first",
 )
 
