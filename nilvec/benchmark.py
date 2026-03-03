@@ -49,12 +49,6 @@ except ImportError:
     weaviate = None
 
 try:
-    import qdrant_client
-except ImportError:
-    print(f"{Fore.YELLOW}Qdrant not installed{Style.RESET_ALL}")
-    qdrant_client = None
-
-try:
     import redis
 except ImportError:
     print(f"{Fore.YELLOW}Redis client not installed{Style.RESET_ALL}")
@@ -123,7 +117,6 @@ ICON_MAPPING = {
     "FAISS": ("paper/imgs/meta.png", 0.005),
     "USearch": ("paper/imgs/usearch.png", 0.015),
     "Weaviate": ("paper/imgs/weaviate.png", 0.015),
-    "Qdrant": ("paper/imgs/qdrant.png", 0.005),
     "Redis": ("paper/imgs/redis.png", 0.015),
 }
 
@@ -132,7 +125,6 @@ COLOR_MAPPING = {
     "FAISS": "#1877F2",  # Facebook Blue
     "USearch": "#192940",  # Dark Blue
     "Weaviate": "#ddd347",  # Yellow
-    "Qdrant": "#dc244c",  # Raspberry Red
     "Redis": "#d82c20",  # Redis Red
 }
 
@@ -285,7 +277,7 @@ def add_semantic_style_legend(ax):
 
 
 def format_benchmark_header(name, rw_ratio):
-    if name in {"Qdrant", "Redis", "Weaviate", "USearch"} or "FAISS" in name:
+    if name in {"Redis", "Weaviate", "USearch"} or "FAISS" in name:
         name_color = Fore.MAGENTA
     else:
         name_color = Fore.CYAN
@@ -533,88 +525,6 @@ class WeaviateIndex:
 
     def close(self):
         self.client.close()
-
-
-class QdrantIndex:
-    def __init__(self, dim, M=16, ef_construction=200):
-        try:
-            from qdrant_client import QdrantClient
-            from qdrant_client.models import Distance, HnswConfigDiff, VectorParams
-        except ImportError:
-            raise ImportError("qdrant-client not installed")
-
-        self._tmp_dir = tempfile.mkdtemp(prefix="nilvec_qdrant_")
-        self.client = QdrantClient(path=self._tmp_dir)
-        self.collection_name = "nilvec_bench_qdrant"
-        self._next_id = 0
-        self._id_lock = threading.Lock()
-        # Qdrant local backend isn't safe for concurrent search+upsert on one collection.
-        # Serialize operations to avoid internal shape/race errors.
-        self._op_lock = threading.Lock()
-
-        if self.client.collection_exists(self.collection_name):
-            self.client.delete_collection(self.collection_name)
-
-        self.client.create_collection(
-            collection_name=self.collection_name,
-            vectors_config=VectorParams(size=dim, distance=Distance.EUCLID),
-            hnsw_config=HnswConfigDiff(m=M, ef_construct=ef_construction),
-        )
-
-    def insert(self, vec):
-        from qdrant_client.models import PointStruct
-
-        with self._id_lock:
-            point_id = self._next_id
-            self._next_id += 1
-
-        with self._op_lock:
-            self.client.upsert(
-                collection_name=self.collection_name,
-                points=[PointStruct(id=point_id, vector=vec)],
-                wait=True,
-            )
-
-    def search(self, query, k, ef=None):
-        from qdrant_client.models import SearchParams
-
-        params = SearchParams(hnsw_ef=ef) if ef is not None else None
-        with self._op_lock:
-            if hasattr(self.client, "search"):
-                res = self.client.search(
-                    collection_name=self.collection_name,
-                    query_vector=query,
-                    limit=k,
-                    search_params=params,
-                    with_payload=False,
-                    with_vectors=False,
-                )
-            else:
-                query_res = self.client.query_points(
-                    collection_name=self.collection_name,
-                    query=query,
-                    limit=k,
-                    search_params=params,
-                    with_payload=False,
-                    with_vectors=False,
-                )
-                res = query_res.points
-
-        ids = [hit.id for hit in res]
-        distances = [hit.score for hit in res]
-        return type("Result", (object,), {"ids": ids, "distances": distances})()
-
-    def train(self, data):
-        pass
-
-    def set_nprobe(self, n):
-        pass
-
-    def close(self):
-        if hasattr(self.client, "close"):
-            self.client.close()
-        if getattr(self, "_tmp_dir", None) and os.path.isdir(self._tmp_dir):
-            shutil.rmtree(self._tmp_dir, ignore_errors=True)
 
 
 class RedisIndex:
@@ -1952,9 +1862,6 @@ def _run_single_dataset(args, dataset_path):
         #     externals.append((MilvusIndex, "Milvus", hnsw_args))
         if weaviate:
             externals.append((WeaviateIndex, "Weaviate", hnsw_args))
-        # Omitted becasue it takes 30 min (alone) on a small dataset
-        if qdrant_client:
-            externals.append((QdrantIndex, "Qdrant", hnsw_args))
         redis_ready, redis_info = redis_benchmark_ready(
             auto_start=args.auto_start_redis
         )

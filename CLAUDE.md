@@ -15,8 +15,6 @@ Avoid adding redundant expositions that experts would already be familiar with.
 This is a C++23 project with Python bindings (pybind11), built with Meson and managed with `uv`.
 
 ```bash
-# Install Python deps (editable, with dev tools)
-uv pip install -e ".[full]"
 
 # Build C++ code and Python extension module
 meson setup builddir -Duse_hdf5=true
@@ -60,7 +58,7 @@ typst watch paper/nilvec.typ --open
 
 ## Architecture
 
-**NilVec** is a benchmarking framework for concurrent approximate nearest neighbor (ANN) search indexes. It implements two index families (HNSW and IVFFlat) with multiple concurrency strategies, then benchmarks them against external libraries (FAISS, USearch, Weaviate, Qdrant, Redis).
+**NilVec** is a benchmarking framework for concurrent approximate nearest neighbor (ANN) search indexes. It implements two index families (HNSW and IVFFlat) with multiple concurrency strategies, then benchmarks them against external libraries (FAISS, USearch, Weaviate, Redis).
 
 ### C++ Index Implementations (`src/`)
 
@@ -73,6 +71,7 @@ All indexes are header-only C++ templates in the `nilvec` namespace. Each index 
 - **Fine Optimistic** -- per-node version numbers, retry on conflict
 
 Index families:
+
 - `hnsw_*.hpp` -- Hierarchical Navigable Small World graph
 - `ivfflat_*.hpp` -- Inverted File with Flat (brute-force) quantizer; requires `train()` before `insert()`
 - `flat_vanilla.hpp` -- brute-force linear scan (used for ground truth computation)
@@ -86,7 +85,8 @@ pybind11 module `_nilvec`. All performance-critical methods (`insert`, `search`,
 ### Benchmark Framework (`nilvec/benchmark.py`)
 
 `nilvec/benchmark.py` is the main benchmark driver. It:
-- Wraps external libraries (FAISS, USearch, Milvus, Weaviate, Qdrant, Redis) in a common interface
+
+- Wraps external libraries (FAISS, USearch, Milvus, Weaviate, Redis) in a common interface
 - Runs throughput-vs-threads and recall-vs-QPS benchmarks
 - Supports threading and multiprocessing concurrency modes
 - Persists results to DuckDB and can cross-pollinate historical results across runs

@@ -6,8 +6,7 @@
   #name
 ]
 
-#set page(margin: (x: 1in, y: 1in))
-// #set text(font: "Times New Roman", size: 11pt)
+#set page(margin: (x: 1in, y: 1in), numbering: "1", number-align: center + bottom)
 #set heading(numbering: "1.")
 #set par(justify: true)
 
@@ -81,19 +80,26 @@ This gap motivates our systematic exploration of the concurrency control design 
 
 = Methodology
 
-We evaluate the performance of our concurrency control strategies using a standard ANN benchmark dataset. Specifically, we use the Fashion-MNIST dataset ($d=784$), measuring performance under a mixed workload of search and insertion operations.
-
-== Dataset and Workload
+The benchmarking harness is implemented in Python and invokes the core C++ index implementations through bindings to minimize orchestration overhead.
 
 The primary workload consists of a concurrent mix of document insertions and approximate nearest neighbor searches. The write ratio ramps linearly from 1% to 5% as thread count increases from 2 to 16, so that contention pressure grows alongside parallelism. We vary the number of concurrent worker threads from 2 to 16 to observe the scaling behavior of each index implementation.
 
 Standard database benchmarks model production workloads as overwhelmingly read-heavy. YCSB Workload B (95% read, 5% update) and Workload D (95% read, 5% insert) represent the read-mostly tier of the Yahoo! Cloud Serving Benchmark suite @cooper2010ycsb, and even the "update-heavy" Workload A allocates only 50% of operations to writes. Production vector databases skew further toward reads: ingestion is typically batched or periodic, while queries arrive continuously. Our 1--5% write range falls within this production regime. However, our goal is to stress concurrency control mechanisms, not to replicate a particular deployment profile. By ramping the write ratio across thread counts, we ensure that write-write and read-write conflicts increase with parallelism, exposing scaling bottlenecks that a fixed low write ratio would mask at higher thread counts.
 
-We use the Fashion-MNIST dataset, utilizing the Euclidean distance metric. The dataset contains 60,000 training vectors and 10,000 query vectors, with a dimensionality of 784.
+Reported in this paper:
 
-== Experimental Environment
+- SIFT-128 Euclidean: 1,000,000 training vectors and 10,000 query vectors, with dimensionality $d=128$ @annbench_sift128.
+- Fashion-MNIST-784 Euclidean: 60,000 training vectors and 10,000 query vectors, with dimensionality $d=784$ @annbench_fashion784 @xiao2017fashionmnist.
 
-All experiments were conducted on a Lenovo Legion Pro 7i 16IAX10H with an Intel Core Ultra 9 275HX CPU (24 total cores: 8P+16E) and 32 GiB RAM. CPU-only measurements are reported for throughput and recall; GPU acceleration was excluded from the primary comparisons to keep index implementations on a consistent execution target. The benchmarking harness is implemented in Python and invokes the core C++ index implementations through bindings to minimize orchestration overhead.
+Configured in the benchmark harness (not yet reported in this paper):
+
+- GloVe-100 Angular: 1,183,514 training vectors and 10,000 query vectors, with dimensionality $d=100$ @annbench_glove100.
+- GloVe-25 Angular: 1,183,514 training vectors and 10,000 query vectors, with dimensionality $d=25$ @annbench_glove25.
+- GIST-960 Euclidean: 1,000,000 training vectors and 1,000 query vectors, with dimensionality $d=960$ @annbench_gist960.
+- NYTimes-256 Angular: 290,000 training vectors and 10,000 query vectors, with dimensionality $d=256$ @annbench_nytimes256.
+- MNIST-784 Euclidean: 60,000 training vectors and 10,000 query vectors, with dimensionality $d=784$ @annbench_mnist784.
+
+All experiments were conducted on a Lenovo Legion Pro 7i 16IAX10H with an Intel Core Ultra 9 275HX CPU (24 total cores: 8P+16E) and 32 GiB RAM.
 
 = Results
 
@@ -101,7 +107,7 @@ All experiments were conducted on a Lenovo Legion Pro 7i 16IAX10H with an Intel 
 
 Incidentally, the lower a dataset's throughput, the higher is cluster density.
 
-Qdrant was omitted from the plotted throughput comparison because its performance was substantially lower and did not scale with thread count in this workload (2 threads: 561 ops/s, 4: 537 ops/s, 8: 571 ops/s, 16: 530 ops/s).
+
 
 #figure(
   grid(
@@ -123,12 +129,9 @@ Qdrant was omitted from the plotted throughput comparison because its performanc
 
 = Discussion
 
-<<<<<<< HEAD
-- *_Why hasn't this been done before?_* The predominant paradigm has been offline construction followed by read-only serving, so reader-writer concurrency at the index level simply never arose. Systems that do accept writes typically side-step the problem architecturally: mutable segments are flushed to read-only storage on a rolling basis, and searches hit only sealed data @wang2021milvus. Streaming workloads driven by retrieval-augmented generation @lewis2020rag have only recently made in-place concurrent update a practical consideration.
-=======
-- *_Why hasn't this been done before?_* The predominant paradigm has been offline construction followed by read-only serving, so reader-writer concurrency at the index level simply never arose. Systems that do accept writes typically side-step the problem architecturally: mutable segments are flushed to read-only storage on a rolling basis, and searches hit only sealed data @wang2021milvus. Deletions are handled similarly via tombstoning followed by periodic rebuilds rather than in-place graph repair @pinecone2023hnsw. Streaming workloads driven by retrieval-augmented generation @lewis2020rag have only recently made in-place concurrent update a practical requirement.
->>>>>>> 056b52d (//)
+- *_Why hasn't this been done before?_* The predominant paradigm has been offline construction followed by read-only serving, so reader-writer concurrency at the index level simply never arose. Systems that do accept writes typically side-step the problem architecturally: mutable segments are flushed to read-only storage on a rolling basis, and searches hit only sealed data @wang2021milvus. Deletions are handled similarly via tombstoning followed by periodic rebuilds rather than in-place graph repair @pinecone2023hnsw. Streaming workloads driven by retrieval-augmented generation @lewis2020rag have only recently made in-place concurrent update a practical consideration.
 
+- *_Why weren't GPU-accelerated indexes included?_* GPU-accelerated indexes we save for a future study and later revision, as that would entail writing GPU accelerations for our own implementations.
 
 - *_Why does HNSW degrade more under concurrent writes than IVF?_* The answer lies in a structural asymmetry between the two index types. HNSW is a navigable small-world graph: its search correctness depends on the graph remaining well-connected across layers @malkov2020hnsw. During insertion, a new node is wired into the graph by selecting neighbors via a heuristic and then back-linking those neighbors to the new node @malkov2020hnsw. Under concurrent writes, these two steps are not atomic. A racing writer can observe a partially-linked node, traverse a stale edge, or have its own neighbor list pruned before its back-links are established, any of which can leave the graph with weakly connected or entirely isolated nodes. Heuristics like deferred or batched pruning reduce the frequency of such breaks but cannot eliminate them: they trade recall loss for throughput, rather than recovering the full structural guarantee. IVF does not share this vulnerability. At the coarse quantizer level, cluster assignment is a read-only operation; inserting a vector into a cluster appends to a list and requires only a per-cluster lock @douze2024faiss. Concurrent writers targeting different clusters are entirely independent, and even writers within the same cluster contend only on a flat append structure with no graph invariant to preserve. The degradation seen in HNSW throughput and recall under high write concurrency is therefore not merely an implementation artifact; it reflects a fundamental tension between the graph connectivity invariant that makes HNSW fast and the atomicity that concurrent mutation requires.
 

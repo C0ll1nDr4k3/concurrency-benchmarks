@@ -1,0 +1,26 @@
+{
+  "languages": {
+    "Python": {
+      "language_servers": ["basedpyright", "!pyright"]
+    }
+  },
+  "lsp": {
+    "basedpyright": {
+      "settings": {
+        "basedpyright.analysis": {
+          "diagnosticMode": "openFilesOnly",
+          "typeCheckingMode": "standard",
+          "inlayHints": {
+            "variableTypes": true,
+            "functionReturnTypes": true,
+            "callArgumentNames": false,
+            "genericTypes": true
+          }
+        },
+        "python": {
+          "pythonPath": ".venv/bin/python"
+        }
+      }
+    }
+  }
+}
