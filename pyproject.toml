@@ -52,7 +52,7 @@ typeCheckingMode = "standard"
 reportMissingTypeStubs = false
 venvPath = "."
 venv = ".venv"
-include = ["nilvec", "test", "src", "paper"]
+include = ["test", "src", "paper"]
 exclude = ["**/node_modules", "**/__pycache__", "builddir"]
 
 [dependency-groups]
