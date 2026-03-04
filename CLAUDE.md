@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Writing Guidelines
 
-Never use em dashes.
+Never use em dashes (— or --).
 
 Never make a claim about anything external without first citing specifically where and how it supports said claim.
 

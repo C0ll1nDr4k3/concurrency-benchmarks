@@ -108,12 +108,12 @@ T4: write red → release
       #align(center)[_Optimistic_]
       ```
 // red: v=5; green: v=12; yellow: v=14
-T1: search → snapshot red   v=5
-T2: insert → write to red,    bump v: 5→6
+T1: search → snapshot red v=5
+T2: insert → write to red, bump v: 5→6
 T4: insert → write to yellow, bump v: 14→15
 T3: search → snapshot green v=12
-T1:        → validate red:   5 ≠ 6  → retry
-T3:        → validate green: 12 = 12 → commit
+T1: validate red: 5 ≱ 6 → retry
+T3: validate green: 12 = 12
 ```
     ],
   ),
@@ -132,15 +132,15 @@ T3:        → validate green: 12 = 12 → commit
 
 The four concurrency strategies above apply uniformly within each index family, but the structural asymmetry between HNSW and IVFFlat suggests a hybrid that inherits the strengths of both. HNSW's upper layers naturally partition the vector space: each node promoted to layer 1 or above implicitly defines a Voronoi cell over the layer-0 nodes nearest to it. By making this partition explicit, we obtain IVF-style write isolation at the base layer while retaining HNSW's sublinear graph walk for search.
 
-Our `HNSWIVFCoarsePessimistic` implementation maintains a full HNSW graph across all layers, including layer 0. Each layer-1+ node additionally registers a partition upon insertion, and each layer-0 node is assigned to the partition whose center was nearest during the inserting thread's descent. The partition assignment determines which lock protects a node's layer-0 edge list -- it does not restrict the search path. Layer-0 edges cross partition boundaries freely, connecting each node to its M nearest neighbors regardless of partition membership.
+Our `HybridPessimistic` implementation maintains a full HNSW graph across all layers, including layer 0. Each layer-1+ node additionally registers a partition upon insertion, and each layer-0 node is assigned to the partition whose center was nearest during the inserting thread's descent. The partition assignment determines which lock protects a node's layer-0 edge list -- it does not restrict the search path. Layer-0 edges cross partition boundaries freely, connecting each node to its M nearest neighbors regardless of partition membership.
 
 The $~$M nodes that arrive before the first layer-1+ node are held in an unassigned queue and drained into their nearest center when one appears, using brute-force nearest-center lookup over this small set. Deletion of a partition center triggers reassignment: the center's children are redistributed to their nearest surviving center, and the center's upper-layer graph edges are severed. All deleted nodes are tombstoned and filtered during graph traversal.
 
 Search proceeds in two phases. First, greedy descent through the upper HNSW layers routes the query to layer 1, where a beam search identifies the `nprobe` nearest partition centers. Second, a layer-0 beam search is launched from each probed center, walking edges across partition boundaries. As each node is encountered, its partition's shared lock is acquired to read the edge list. The `nprobe` parameter controls how many entry points seed the layer-0 walk: additional entry points explore spatially distinct regions of the graph, improving recall for queries near partition boundaries.
 
-The locking scheme separates the concurrency domain from the search domain. Upper-layer graph edges are protected by per-layer `shared_mutex` locks (as in `HNSWCoarsePessimistic`). At layer 0, each partition has its own `shared_mutex` protecting the edge lists of all nodes assigned to it. Readers acquire shared partition locks as they traverse nodes, so multiple concurrent searches never block each other. Writers acquire exclusive locks on the partitions they modify: the new node's own partition for its edge list, plus each neighbor's partition for reverse edges, acquired in index order to prevent deadlock. Because a typical insert touches at most 2--3 partitions (bounded by M), writers to disjoint regions proceed without contention -- the same concurrency property that makes IVFFlat scale well, but with sublinear search rather than linear flat scan.
+The locking scheme separates the concurrency domain from the search domain. Upper-layer graph edges are protected by per-layer `shared_mutex` locks (as in `HNSWCoarsePessimistic`). At layer 0, each partition has its own `shared_mutex` protecting the edge lists of all nodes assigned to it. Readers acquire shared partition locks as they traverse nodes, so multiple concurrent searches never block each other. Writers acquire exclusive locks on the partitions they modify: the new node's own partition for its edge list, plus each neighbor's partition for reverse edges, acquired in index order to prevent deadlock. Because a typical insert touches at most 2--3 partitions (bounded by M), writers to disjoint regions proceed without contention; the same concurrency property that makes IVFFlat scale well, but with sublinear search rather than linear flat scan.
 
-The tradeoff is that partition quality depends on HNSW's stochastic level generation rather than $k$-means training. The resulting partitions are less balanced than IVFFlat's, and partition sizes follow the distribution of the data rather than an optimized quantizer. However, because the layer-0 search walks edges across partition boundaries rather than scanning within them, recall is less sensitive to partition quality than in pure IVF -- even `nprobe` $= 1$ can achieve high recall if the graph is well-connected. The routing cost through the upper layers is logarithmic in the number of partitions rather than linear, since HNSW's graph replaces the brute-force centroid scan.
+The tradeoff is that partition quality depends on HNSW's stochastic level generation rather than $k$-means training. The resulting partitions are less balanced than IVFFlat's, and partition sizes follow the distribution of the data rather than an optimized quantizer. However, because the layer-0 search walks edges across partition boundaries rather than scanning within them, recall is less sensitive to partition quality than in pure IVF. Even `nprobe` $= 1$ can achieve high recall if the graph is well-connected. The routing cost through the upper layers is logarithmic in the number of partitions rather than linear, since HNSW's graph replaces the brute-force centroid scan.
 
 == Workload
 
