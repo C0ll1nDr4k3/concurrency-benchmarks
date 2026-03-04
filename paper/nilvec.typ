@@ -1,4 +1,3 @@
-#import "@preview/fletcher:0.5.8" as fletcher: diagram, node, edge
 
 #show "University of Colorado Boulder": name => box[
   #box(image(
@@ -60,7 +59,7 @@
     #block()[
       #text(weight: "bold")[Abstract] #h(0.5em)
 
-      Implementing thread-safety in ANN indexes presents a variety of design choices. Ultimately, the tradeoffs converge to two axes: locking granularity and conflict resolution. In both architectures, conflicts may be handled optimistically or pessimistically. In this paper, we implement and evaluate the cross-product of these strategies.
+      Implementing thread-safety in ANN indexes presents a variety of design choices. Ultimately, the tradeoffs converge to two axes: locking granularity and conflict resolution. In both architectures, conflicts may be handled optimistically or pessimistically. In this paper, we implement and evaluate all four combinations of these two axes against inudstry-standard implementations.
 
     ]
   ]
@@ -78,121 +77,60 @@ ParlayANN takes a different approach, offering two strategies for parallel const
 
 JVector demonstrates near-linear scaling of nonblocking concurrent construction on SIFT-1M @jvector, but like FAISS and ParlayANN this targets build-time parallelism rather than online read-write concurrency.
 
-This gap motivates our systematic exploration of the concurrency control design space for online ANN indexes. We identify two key dimensions along which strategies may vary: locking granularity (coarse-grained at the partition or bucket level vs. fine-grained at the individual neighbor list level) and conflict resolution policy (optimistic with validation and retry vs. pessimistic with blocking) @kung1981optimistic. The cross-product of these dimensions yields four distinct strategies. We implement each strategy for both IVFFlat and HNSW indexes and evaluate their performance under mixed read-write workloads. Our evaluation provides the first empirical comparison of concurrency control approaches for streaming vector search.
+This gap motivates our systematic exploration of the concurrency control design space for online ANN indexes. We identify two key dimensions along which strategies may vary: locking granularity (coarse-grained at the partition or bucket level vs. fine-grained at the individual neighbor list level) and conflict resolution policy (optimistic with validation and retry vs. pessimistic with blocking) @kung1981optimistic. Combining these two dimensions yields four distinct strategies. We implement each strategy for both IVFFlat and HNSW indexes and evaluate their performance under mixed read-write workloads. Our evaluation provides the first empirical comparison of concurrency control approaches for streaming vector search.
 
 = Methodology
 
 == Index Implementations
 
-Each index family (IVFFlat and HNSW) is implemented with four concurrency strategies drawn from the cross-product of two axes: locking granularity (coarse vs. fine) and conflict resolution (pessimistic vs. optimistic).
+Each index family (IVFFlat and HNSW) is implemented with four concurrency strategies spanning two axes: locking granularity (coarse vs. fine) and conflict resolution (pessimistic vs. optimistic).
 
 #figure(
-  diagram(
-    node-stroke: .65pt,
-    edge-stroke: .65pt,
-    spacing: (9mm, 14mm),
-
-    // ── Annotation nodes ─────────────────────────────────────────────
-    node(
-      (-0.6, 0.5),
-      align(right, text(size: 7.5pt, fill: blue.darken(30%))[
-        `search()` \
-        shared_lock
-      ]),
-      stroke: none,
-      name: <rdr>,
-    ),
-    node(
-      (3.6, 0.5),
-      align(left, text(size: 7.5pt, fill: red.darken(30%))[
-        `insert()` \
-        unique_lock
-      ]),
-      stroke: none,
-      name: <wtr>,
-    ),
-
-    // ── Per-bucket mutex nodes ───────────────────────────────────────
-    node(
-      (0, 0.5),
-      text(size: 8pt)[`shared_mutex`],
-      fill: red.lighten(80%),
-      stroke: red.darken(20%) + .8pt,
-      name: <mtx0>,
-      inset: 5pt,
-    ),
-    node(
-      (1.2, 0.5),
-      text(size: 8pt)[`shared_mutex`],
-      fill: red.lighten(80%),
-      stroke: red.darken(20%) + .8pt,
-      name: <mtx1>,
-      inset: 5pt,
-    ),
-    node(
-      (2.4, 0.5),
-      text(size: 8pt)[`shared_mutex`],
-      fill: red.lighten(80%),
-      stroke: red.darken(20%) + .8pt,
-      name: <mtx2>,
-      inset: 5pt,
-    ),
-
-    edge(<rdr>, <mtx0>, "->", stroke: blue.darken(20%) + .6pt),
-    edge(<wtr>, <mtx2>, "->", stroke: red.darken(20%) + .6pt),
-
-    // ── Cluster cells ─────────────────────────────────────────────────
-    node(
-      (0, 2),
-      align(center)[
-        *Cluster 0* \
-        #v(2pt)
-        #text(size: 8pt)[$c_0$] \
-        #text(size: 7.5pt)[v₀, v₃, v₇]
-      ],
-      name: <c0>,
-      inset: 5pt,
-    ),
-    node(
-      (1.2, 2),
-      align(center)[
-        *Cluster 1* \
-        #v(2pt)
-        #text(size: 8pt)[$c_1$] \
-        #text(size: 7.5pt)[v₁, v₅]
-      ],
-      name: <c1>,
-      inset: 5pt,
-    ),
-    node(
-      (2.4, 2),
-      align(center)[
-        *Cluster 2* \
-        #v(2pt)
-        #text(size: 8pt)[$c_2$] \
-        #text(size: 7.5pt)[v₂, v₄, v₆]
-      ],
-      name: <c2>,
-      inset: 5pt,
-    ),
-    node(
-      (3.5, 2),
-      $dots.h.c$,
-      stroke: none,
-      name: <dots>,
-    ),
-
-    // ── Per-bucket mutex → cluster edges ──────────────────────────────
-    edge(<mtx0>, <c0>, "->"),
-    edge(<mtx1>, <c1>, "->"),
-    edge(<mtx2>, <c2>, "->"),
+  grid(
+    columns: 2,
+    gutter: 12pt,
+    [
+      #figure(
+        image("plots/voronoi_pessimistic.png", width: 100%),
+        caption: [Pessimistic],
+      )
+      ```
+// q → green, v → yellow, v2 → red
+T1: search(q)  → acquire green (shared)
+T2: insert(v)  → acquire yellow (exclusive)
+T3: insert(v2) → acquire red   (exclusive)
+// disjoint cells: T1, T2, T3 never contend
+T1:            → scan green → release
+T2:            → write to yellow → release
+T3:            → write to red → release
+```
+    ],
+    [
+      #figure(
+        image("plots/voronoi_optimistic.png", width: 100%),
+        caption: [Optimistic],
+      )
+      ```
+// red: v=5; green: v=12; yellow: v=14
+T1: search(q2) → snapshot red   v=5
+T2: insert(v)  → write to red, bump red: 5→6
+T4: insert(w)  → write to yellow, bump yellow: 14→15
+T3: search(q)  → snapshot green v=12
+T1:            → validate red:   5 ≠ 6  → CONFLICT/RETRY
+T3:            → validate green: 12 = 12 → commit
+```
+    ],
   ),
   caption: [
-    IVFFlat coarse pessimistic: each cluster has its own `shared_mutex`.
-    `search()` acquires a shared lock on each probed bucket; `insert()` acquires
-    an exclusive lock only on the target bucket. Writers to different clusters proceed concurrently.
+    Geometric interpretation of IVFFlat coarse locking strategies over a
+    Voronoi partition. _Pessimistic_: each cell is guarded by a mutex;
+    readers acquire a shared lock and writers an exclusive lock, so
+    concurrent operations on disjoint cells never contend. _Optimistic_:
+    threads snapshot the cell version before operating and validate on
+    commit; a writer that advances the version mid-search forces the reader
+    to retry.
   ],
-) <fig-ivf-coarse-pess>
+)
 
 == Workload
 

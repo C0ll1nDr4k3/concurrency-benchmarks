@@ -8,11 +8,6 @@
 - **Package Manager**: `uv`.
 - **Libraries**: OpenMP (optional, for some baselines), HDF5 (for reading datasets).
 
-## Setup (For Development)
-
-1.  **Prepare Data**:
-    The benchmark script automatically downloads the dataset (`data/sift-128-euclidean.hdf5`) if it is missing.
-
 ## Building
 
 The project uses Meson for the C++ build and `uv` for the Python environment.
