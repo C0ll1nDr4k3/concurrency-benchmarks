@@ -62,10 +62,6 @@ uv run main.py --dataset data/sift-128-euclidean.hdf5 --save-results benchmark_r
 
 ## Concurrency Model
 
-NilVec supports two concurrency modes for benchmarking: **threading** (default) and **multiprocessing**.
-
-### Threading Mode (Default)
-
 NilVec's Python bindings release the GIL (Global Interpreter Lock) for all performance-critical operations:
 
 - `insert()` - GIL released during vector insertion
@@ -82,53 +78,11 @@ uv run pytest test/test_gil_release.py -v
 
 Expected output: ~3-4x speedup with 4 threads, confirming parallel execution.
 
-**Run threading benchmarks:**
+**Run benchmarks:**
 
 ```bash
-# Threading mode (default)
 uv run python main.py
-
-# Explicit threading mode
-uv run python main.py --mode threading
 ```
-
-### Multiprocessing Mode
-
-For scenarios requiring complete process isolation, NilVec supports multiprocessing mode where each process creates its own independent index instance.
-
-**Run multiprocessing benchmarks:**
-
-```bash
-# Multiprocessing mode
-uv run python main.py --mode multiprocessing
-```
-
-Each process:
-
-- Creates its own index instance
-- Operates on a partition of the data
-- Reports throughput independently
-- Results are aggregated in the parent process
-
-**Use cases:**
-
-- Validating threading performance
-- Testing deployment with multiple index instances
-- Avoiding any potential GIL contention in Python layer
-
-### Performance Comparison
-
-Compare threading vs multiprocessing side-by-side:
-
-```bash
-# Run both modes and generate comparison plots
-uv run python main.py --mode both
-
-# Quick comparison with small dataset
-uv run python main.py --mode both --limit 1000 --skip-recall
-```
-
-This generates plots showing both threading and multiprocessing throughput on the same graph.
 
 ### Advanced Options
 
@@ -139,8 +93,8 @@ uv run python main.py --verify-gil
 # Control read/write ratio (0.0 = read-only, 1.0 = write-only)
 uv run python main.py --rw-ratio 0.5
 
-# Test all datasets with both concurrency modes
-uv run python main.py --mode both --all
+# Test all datasets
+uv run python main.py --all
 ```
 
 ## Latest Benchmarks

@@ -47,7 +47,6 @@ clang-format -i **/*.cpp **/*.hpp && uv format
 uv run main.py --dataset data/sift-128-euclidean.hdf5               # full run
 uv run main.py --dataset data/sift-128-euclidean.hdf5 --skip-recall  # throughput only
 uv run main.py --dataset data/sift-128-euclidean.hdf5 --skip-recall --limit 1000  # quick test
-uv run python -m nilvec.benchmark --mode both  # threading vs multiprocessing comparison
 ```
 
 ## Paper
@@ -88,7 +87,6 @@ pybind11 module `_nilvec`. All performance-critical methods (`insert`, `search`,
 
 - Wraps external libraries (FAISS, USearch, Milvus, Weaviate, Redis) in a common interface
 - Runs throughput-vs-threads and recall-vs-QPS benchmarks
-- Supports threading and multiprocessing concurrency modes
 - Persists results to DuckDB and can cross-pollinate historical results across runs
 - Generates SVG plots to `paper/plots/`
 

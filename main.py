@@ -176,7 +176,7 @@ GRANULARITY_MARKER_MAPPING = {
 
 def _normalize_index_name(name):
     normalized = str(name)
-    for suffix in (" (MP)", " (history)"):
+    for suffix in (" (history)",):
         normalized = normalized.replace(suffix, "")
     if " [" in normalized and normalized.endswith("]"):
         normalized = normalized[: normalized.rfind(" [")]
@@ -319,7 +319,12 @@ def format_benchmark_header(name, rw_ratio):
 
 
 def format_throughput_line(
-    num_threads, num_insert_threads, num_search_threads, throughput, prev
+    num_threads,
+    num_insert_threads,
+    num_search_threads,
+    throughput,
+    prev,
+    build_time=None,
 ):
     if prev is None:
         throughput_color = Fore.CYAN
@@ -329,9 +334,16 @@ def format_throughput_line(
         throughput_color = Fore.RED
     else:
         throughput_color = Fore.YELLOW
+    build_str = ""
+    if build_time is not None:
+        build_str = (
+            f"{Fore.BLUE}Build:{Style.RESET_ALL} "
+            f"{Fore.WHITE}{build_time:.2f}s{Style.RESET_ALL} | "
+        )
     return (
         f"  {Fore.BLUE}Threads:{Style.RESET_ALL} {num_threads} "
         f"{Fore.WHITE}(W={num_insert_threads}, R={num_search_threads}){Style.RESET_ALL} -> "
+        f"{build_str}"
         f"{Fore.BLUE}Throughput:{Style.RESET_ALL} "
         f"{Style.BRIGHT}{throughput_color}{throughput:.0f}{Style.RESET_ALL} ops/s"
     )
@@ -1196,73 +1208,6 @@ class BenchmarkResultsStore:
 # --- Benchmarks ---
 
 
-# --- Multiprocessing Workers ---
-
-
-def _mp_init_index(index_cls, index_args, dim, train_data):
-    """Initialize index in worker process"""
-    if "IVF" in index_cls.__name__:
-        index = index_cls(dim, *index_args)
-        index.train(train_data)
-    else:
-        index = index_cls(dim, *index_args)
-    return index
-
-
-def _mp_worker_insert(args):
-    """Insert worker for multiprocessing - runs in separate process"""
-    index_cls, index_args, dim, data_chunk, train_data = args
-
-    # Initialize index in this process
-    index = _mp_init_index(index_cls, index_args, dim, train_data)
-
-    # Pre-load half the data (matching threading benchmark)
-    half = len(data_chunk) // 2
-    for vec in data_chunk[:half]:
-        index.insert(vec)
-
-    # Time the remaining inserts
-    start = time.time()
-    ops_count = 0
-    for vec in data_chunk[half:]:
-        index.insert(vec)
-        ops_count += 1
-    duration = time.time() - start
-
-    # Cleanup
-    if hasattr(index, "close"):
-        index.close()
-
-    return ops_count, duration
-
-
-def _mp_worker_search(args):
-    """Search worker for multiprocessing - runs in separate process"""
-    index_cls, index_args, dim, preload_data, queries, k, train_data = args
-
-    # Initialize index in this process
-    index = _mp_init_index(index_cls, index_args, dim, train_data)
-
-    # Pre-load data
-    for vec in preload_data:
-        index.insert(vec)
-
-    # Time searches (5 iterations to match threading benchmark)
-    start = time.time()
-    total_ops = 0
-    for _ in range(5):
-        for q in queries:
-            index.search(q, k)
-            total_ops += 1
-    duration = time.time() - start
-
-    # Cleanup
-    if hasattr(index, "close"):
-        index.close()
-
-    return total_ops, duration
-
-
 def benchmark_recall_vs_qps(
     index_cls, index_name, data, queries, gt, k, index_args=None, search_params=None
 ):
@@ -1336,12 +1281,20 @@ def benchmark_recall_vs_qps(
 
 
 def benchmark_throughput_vs_threads(
-    index_cls, index_name, data, queries, k, index_args=None, rw_ratio=0.5
+    index_cls,
+    index_name,
+    data,
+    queries,
+    k,
+    index_args=None,
+    rw_ratio=0.5,
+    preload_ratio=0.5,
 ):
     """
     Run Throughput vs Threads benchmark with configurable R/W split.
     rw_ratio: float for a fixed ratio, or list of floats (one per THREAD_COUNTS entry)
               for a ramping schedule across thread counts.
+    preload_ratio: fraction of dataset to pre-load during construction (default: 0.8).
     """
     if index_args is None:
         index_args = []
@@ -1365,6 +1318,7 @@ def benchmark_throughput_vs_threads(
     index_start_time = time.time()
     results = []
     conflict_rates = []
+    build_times = []
 
     stop_event = threading.Event()
 
@@ -1373,16 +1327,19 @@ def benchmark_throughput_vs_threads(
             break
 
         # Re-create index for each run to be clean
+        build_start = time.time()
         if "IVF" in index_name:
             index = index_cls(DIM, *index_args)
             index.train(data)
         else:
             index = index_cls(DIM, *index_args)
 
-        # Pre-load some data
-        initial_size = len(data) // 2
+        # Pre-load data
+        initial_size = int(len(data) * preload_ratio)
         for i in range(initial_size):
             index.insert(data[i])
+        build_time = time.time() - build_start
+        build_times.append(build_time)
 
         remaining_data = data[initial_size:]
 
@@ -1467,7 +1424,7 @@ def benchmark_throughput_vs_threads(
 
             if hasattr(index, "close"):
                 index.close()
-            return None, None
+            return None, None, None
 
         duration = time.time() - start_time
 
@@ -1485,7 +1442,12 @@ def benchmark_throughput_vs_threads(
         prev = results[-1] if results else None
         print(
             format_throughput_line(
-                num_threads, num_insert_threads, num_search_threads, throughput, prev
+                num_threads,
+                num_insert_threads,
+                num_search_threads,
+                throughput,
+                prev,
+                build_time,
             )
         )
         results.append(throughput)
@@ -1506,139 +1468,7 @@ def benchmark_throughput_vs_threads(
         f"  {Fore.WHITE}Elapsed time for {Style.BRIGHT}{index_name}{Style.RESET_ALL}"
         f"{Fore.WHITE}: {_format_elapsed(index_elapsed)}{Style.RESET_ALL}"
     )
-    return results, conflict_rates
-
-
-def benchmark_throughput_vs_processes(
-    index_cls, index_name, data, queries, k, index_args=None, rw_ratio=0.5
-):
-    """
-    Run Throughput vs Processes benchmark with configurable R/W split.
-    Each process creates its own independent index instance.
-    rw_ratio: float for a fixed ratio, or list of floats (one per THREAD_COUNTS entry)
-              for a ramping schedule across thread counts.
-    """
-    from concurrent.futures import ProcessPoolExecutor, as_completed
-
-    if index_args is None:
-        index_args = []
-
-    # Normalize rw_ratio into a per-thread-count schedule
-    if isinstance(rw_ratio, list):
-        rw_schedule = rw_ratio
-    else:
-        rw_schedule = [rw_ratio] * len(THREAD_COUNTS)
-
-    # Display header with band info if schedule varies
-    if rw_schedule[0] != rw_schedule[-1]:
-        header_ratio = (rw_schedule[0], rw_schedule[-1])
-    else:
-        header_ratio = rw_schedule[0]
-    print(format_benchmark_header(index_name + " (MP)", header_ratio))
-    index_start_time = time.time()
-    results = []
-    conflict_rates = []  # No conflict tracking in multiprocessing mode
-
-    # Pre-compute training data if needed
-    train_data = data if "IVF" in index_name else None
-
-    for tc_idx, num_processes in enumerate(THREAD_COUNTS):
-        # Calculate process split using per-step ratio
-        step_ratio = rw_schedule[tc_idx]
-        num_insert_procs = int(num_processes * step_ratio)
-        if step_ratio > 0.0 and step_ratio < 1.0:
-            if num_insert_procs == 0 and num_processes > 0:
-                num_insert_procs = 1
-            elif num_insert_procs == num_processes and num_processes > 1:
-                num_insert_procs -= 1
-        elif step_ratio == 0.0:
-            num_insert_procs = 0
-        elif step_ratio == 1.0:
-            num_insert_procs = num_processes
-
-        num_search_procs = num_processes - num_insert_procs
-
-        # Split data for insert workers
-        initial_size = len(data) // 2
-        remaining_data = data[initial_size:]
-        preload_data = data[:initial_size]
-
-        tasks = []
-
-        # Create insert tasks
-        if num_insert_procs > 0:
-            chunk_size = len(remaining_data) // num_insert_procs
-            for i in range(num_insert_procs):
-                start_idx = i * chunk_size
-                end_idx = (
-                    (i + 1) * chunk_size
-                    if i < num_insert_procs - 1
-                    else len(remaining_data)
-                )
-                chunk = remaining_data[start_idx:end_idx]
-                tasks.append(
-                    (_mp_worker_insert, (index_cls, index_args, DIM, chunk, train_data))
-                )
-
-        # Create search tasks
-        if num_search_procs > 0:
-            for _ in range(num_search_procs):
-                tasks.append(
-                    (
-                        _mp_worker_search,
-                        (
-                            index_cls,
-                            index_args,
-                            DIM,
-                            preload_data,
-                            queries,
-                            k,
-                            train_data,
-                        ),
-                    )
-                )
-
-        # Execute in parallel using ProcessPoolExecutor
-        start_time = time.time()
-        total_ops = 0
-
-        try:
-            with ProcessPoolExecutor(max_workers=num_processes) as executor:
-                # Submit all tasks
-                futures = [executor.submit(func, args) for func, args in tasks]
-
-                # Collect results as they complete
-                for future in as_completed(futures):
-                    try:
-                        ops, duration = future.result()
-                        total_ops += ops
-                    except Exception as e:
-                        print(f"\nProcess worker failed: {e}")
-                        executor.shutdown(wait=False, cancel_futures=True)
-                        return None, None
-
-        except KeyboardInterrupt:
-            print(f"\nSkipping {index_name}: Operation has been terminated")
-            return None, None
-
-        duration = time.time() - start_time
-        throughput = total_ops / duration if duration > 0 else 0
-
-        prev = results[-1] if results else None
-        print(
-            format_throughput_line(
-                num_processes, num_insert_procs, num_search_procs, throughput, prev
-            )
-        )
-        results.append(throughput)
-        conflict_rates.append(0)  # No conflict tracking in multiprocessing
-
-    index_elapsed = time.time() - index_start_time
-    print(
-        f"  {Fore.WHITE}Elapsed time for {Style.BRIGHT}{index_name} (MP){Style.RESET_ALL}"
-        f"{Fore.WHITE}: {_format_elapsed(index_elapsed)}{Style.RESET_ALL}"
-    )
-    return results, conflict_rates
+    return results, conflict_rates, build_times
 
 
 # --- Main ---
@@ -1891,6 +1721,7 @@ def _run_single_dataset(args, dataset_path):
         # Run benchmarks and collect data
         throughput_results = {}
         conflict_results = {}
+        build_time_results = {}
 
         # External Indexes definition (used by both modes)
         externals = []
@@ -1931,63 +1762,54 @@ def _run_single_dataset(args, dataset_path):
             def _result_key(name):
                 return f"{name}{band_suffix}"
 
-            # === Threading Mode ===
-            if args.mode in ("threading", "both"):
-                if args.mode == "both":
-                    print(f"\n{Fore.CYAN}--- Threading Mode ---{Style.RESET_ALL}")
-
-                # External Indexes (run first -- these sometimes crash)
-                for cls, name, iargs in externals:
-                    try:
-                        res, conflicts = benchmark_throughput_vs_threads(
-                            cls, name, data, queries, K, iargs, rw_ratio=rw_schedule
-                        )
-                        if res is None:
-                            continue
-                        throughput_results[_result_key(name)] = res
-                        conflict_results[_result_key(name)] = conflicts
-                    except Exception as e:
-                        print(f"Skipping {name}: {e}")
-
-                # Internal Indexes
-                for cls, name, iargs in indexes:
-                    if args.only_external:
+            # External Indexes (run first -- these sometimes crash)
+            for cls, name, iargs in externals:
+                try:
+                    res, conflicts, build = benchmark_throughput_vs_threads(
+                        cls,
+                        name,
+                        data,
+                        queries,
+                        K,
+                        iargs,
+                        rw_ratio=rw_schedule,
+                        preload_ratio=args.preload_ratio,
+                    )
+                    if res is None:
                         continue
-                    try:
-                        res, conflicts = benchmark_throughput_vs_threads(
-                            cls, name, data, queries, K, iargs, rw_ratio=rw_schedule
-                        )
-                        if res is None:
-                            continue
-                        throughput_results[_result_key(name)] = res
-                        conflict_results[_result_key(name)] = conflicts
-                    except Exception as e:
-                        print(f"Skipping {name}: {e}")
+                    throughput_results[_result_key(name)] = res
+                    conflict_results[_result_key(name)] = conflicts
+                    build_time_results[_result_key(name)] = build
+                except Exception as e:
+                    print(f"Skipping {name}: {e}")
 
-            # === Multiprocessing Mode ===
-            if args.mode in ("multiprocessing", "both"):
-                if args.mode == "both":
-                    print(f"\n{Fore.CYAN}--- Multiprocessing Mode ---{Style.RESET_ALL}")
-
-                # Internal Indexes (Multiprocessing)
-                for cls, name, iargs in indexes:
-                    if args.only_external:
+            # Internal Indexes
+            for cls, name, iargs in indexes:
+                if args.only_external:
+                    continue
+                try:
+                    res, conflicts, build = benchmark_throughput_vs_threads(
+                        cls,
+                        name,
+                        data,
+                        queries,
+                        K,
+                        iargs,
+                        rw_ratio=rw_schedule,
+                        preload_ratio=args.preload_ratio,
+                    )
+                    if res is None:
                         continue
-                    try:
-                        res_mp, conflicts_mp = benchmark_throughput_vs_processes(
-                            cls, name, data, queries, K, iargs, rw_ratio=rw_schedule
-                        )
-                        if res_mp is None:
-                            continue
-                        mp_name = f"{name} (MP)"
-                        throughput_results[_result_key(mp_name)] = res_mp
-                        conflict_results[_result_key(mp_name)] = conflicts_mp
-                    except Exception as e:
-                        print(f"Skipping {name} (MP): {e}")
+                    throughput_results[_result_key(name)] = res
+                    conflict_results[_result_key(name)] = conflicts
+                    build_time_results[_result_key(name)] = build
+                except Exception as e:
+                    print(f"Skipping {name}: {e}")
 
         # Cache results
         results_cache["throughput"] = throughput_results
         results_cache["conflicts"] = conflict_results
+        results_cache["build_times"] = build_time_results
         results_cache["external_names"] = [e[1] for e in externals]
 
         if args.cross_pollinate and results_store and run_id:
@@ -2091,7 +1913,9 @@ def _run_single_dataset(args, dataset_path):
 
         def _conflict_style(name):
             upper = name.upper()
-            color = _CONFLICT_COLOR["HNSW"] if "HNSW" in upper else _CONFLICT_COLOR["IVF"]
+            color = (
+                _CONFLICT_COLOR["HNSW"] if "HNSW" in upper else _CONFLICT_COLOR["IVF"]
+            )
             ls = _CONFLICT_LS["fine"] if "FINE" in upper else _CONFLICT_LS["coarse"]
             label = name.replace("Optimistic", "").replace("Opt", "").strip()
             return color, ls, label
@@ -2178,10 +2002,10 @@ def run_benchmark(args=None):
             "--rw-bands",
             nargs="+",
             type=str,
-            default=["0.01-0.05"],
-            help="Write-ratio bands (default: 0.01-0.05). "
+            default=["0.01-0.05", "0.20-0.50"],
+            help="Write-ratio bands (default: '0.01-0.05 0.20-0.50'). "
             "Ratio ramps linearly from low to high across thread counts. "
-            "Multiple bands run separate sweeps, e.g. '0.01-0.05 0.25-0.50'.",
+            "Multiple bands run separate sweeps, e.g. '0.01-0.05 0.20-0.50'.",
         )
         parser.add_argument(
             "--limit",
@@ -2235,11 +2059,10 @@ def run_benchmark(args=None):
             help="Disable Docker auto-start for Redis benchmark preflight",
         )
         parser.add_argument(
-            "--mode",
-            type=str,
-            choices=["threading", "multiprocessing", "both"],
-            default="threading",
-            help="Concurrency mode: threading (default), multiprocessing, or both",
+            "--preload-ratio",
+            type=float,
+            default=0.5,
+            help="Fraction of dataset to pre-load during construction (default: 0.5)",
         )
         parser.add_argument(
             "--verify-gil",

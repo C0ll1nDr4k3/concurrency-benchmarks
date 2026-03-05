@@ -93,28 +93,28 @@ Each index family (IVFFlat and HNSW) is implemented with four concurrency strate
       #image("plots/voronoi_pessimistic.svg", width: 100%)
       #align(center)[_Pessimistic_]
       ```
-T1: search → acquire green (shared)
-T2: insert → acquire red (exclusive)
-T3: insert → acquire yellow (exclusive)
-T4: insert → acquire red (blocked)
-T1: scan green → release
-T2: write red → release → T4 unblocks
-T3: write yellow → release
-T4: write red → release
-```
+      T1: search → acquire green (shared)
+      T2: insert → acquire red (exclusive)
+      T3: insert → acquire yellow (exclusive)
+      T4: insert → acquire red (blocked)
+      T1: scan green → release
+      T2: write red → release → T4 unblocks
+      T3: write yellow → release
+      T4: write red → release
+      ```
     ],
     [
       #image("plots/voronoi_optimistic.svg", width: 100%)
       #align(center)[_Optimistic_]
       ```
-// red: v=5; green: v=12; yellow: v=14
-T1: search → snapshot red v=5
-T2: insert → write to red, bump v: 5→6
-T4: insert → write to yellow, bump v: 14→15
-T3: search → snapshot green v=12
-T1: validate red: 5 ≱ 6 → retry
-T3: validate green: 12 = 12
-```
+      // red: v=5; green: v=12; yellow: v=14
+      T1: search → snapshot red v=5
+      T2: insert → write to red, bump v: 5→6
+      T4: insert → write to yellow, bump v: 14→15
+      T3: search → snapshot green v=12
+      T1: validate red: 5 ≱ 6 → retry
+      T3: validate green: 12 = 12
+      ```
     ],
   ),
   caption: [
@@ -145,11 +145,21 @@ The tradeoff is that partition quality depends on HNSW's stochastic level genera
 
 The benchmarking harness is implemented in Python and invokes the core C++ index implementations through bindings to minimize orchestration overhead.
 
-The primary workload consists of a concurrent mix of document insertions and approximate nearest neighbor searches. The write ratio ramps linearly from 1% to 5% as thread count increases from 2 to 24, so that contention pressure grows alongside parallelism. We vary the number of concurrent worker threads across seven points -- 2, 4, 8, 12, 16, 20, and 24 -- spanning the full physical core count of the test machine and capturing behavior through the E-core saturation region into combined P+E load.
+The primary workload consists of a concurrent mix of document insertions and approximate nearest neighbor searches. We vary the number of concurrent worker threads across seven points -- 2, 4, 8, 12, 16, 20, and 24 -- spanning the full physical core count of the test machine and capturing behavior through the E-core saturation region into combined P+E load.
 
-Standard database benchmarks model production workloads as overwhelmingly read-heavy. YCSB Workload B (95% read, 5% update) and Workload D (95% read, 5% insert) represent the read-mostly tier of the Yahoo! Cloud Serving Benchmark suite @cooper2010ycsb, and even the "update-heavy" Workload A allocates only 50% of operations to writes. Production vector databases skew further toward reads: ingestion is typically batched or periodic, while queries arrive continuously. Our 1--5% write range falls within this production regime. However, our goal is to stress concurrency control mechanisms, not to replicate a particular deployment profile. By ramping the write ratio across thread counts, we ensure that write-write and read-write conflicts increase with parallelism, exposing scaling bottlenecks that a fixed low write ratio would mask at higher thread counts.
+We evaluate each index configuration under two write-ratio bands, both ramping linearly across the thread-count sweep:
+
+- *Production band (W: 1%--5%)*. The write ratio increases from 1% at 2 threads to 5% at 24 threads. Standard database benchmarks model production workloads as overwhelmingly read-heavy. YCSB Workload B (95% read, 5% update) and Workload D (95% read, 5% insert) represent the read-mostly tier of the Yahoo! Cloud Serving Benchmark suite @cooper2010ycsb, and even the "update-heavy" Workload A allocates only 50% of operations to writes. Production vector databases skew further toward reads: ingestion is typically batched or periodic, while queries arrive continuously. Our 1--5% range falls within this production regime.
+
+- *Stress-test band (W: 20%--50%)*. The write ratio increases from 20% at 2 threads to 50% at 24 threads. At these ratios, write-write and read-write conflicts become frequent enough to expose behavioral differences between concurrency control strategies that the production band masks. This band is not intended to represent a deployment profile; it isolates the locking and conflict-resolution overhead that is the focus of this paper.
 
 We evaluate our implementations using the SIFT-128 @annbench_sift128, Fashion-MNIST-784 @xiao2017fashionmnist, GloVe @annbench_glove100 @annbench_glove25, GIST-960 @annbench_gist960, NYTimes-256 @annbench_nytimes256, and MNIST-784 @annbench_mnist784 datasets.
+
+== Measurement
+
+Each throughput data point proceeds in two phases. First, a _construction phase_ creates a fresh index, trains it (for IVF variants), and bulk-inserts the first 50% of the dataset into the shared index, single-threaded. This pre-load gives the index enough structure to serve queries before the timed phase begins. Build time covers this phase and is reported separately; it is excluded from the throughput calculation. Second, a _mixed-workload phase_ launches writer and reader threads concurrently against the pre-loaded index: writers insert the remaining vectors (split evenly across insert threads) while readers execute five full passes over the query set. All performance-critical C++ methods release the Python GIL, so threads achieve true parallelism. Throughput is computed as total operations (inserts plus searches) divided by the wall-clock duration of this second phase only.
+
+All indexes return $k = 10$ nearest neighbors per query. HNSW variants use $M = 16$ bidirectional links per node and $"ef"_"construction" = 200$. IVFFlat variants use $n_"list" = floor(sqrt(N))$ clusters, where $N$ is the number of indexed vectors, and $n_"probe" = 1$ for throughput benchmarks.
 
 All experiments were conducted on a Lenovo Legion Pro 7i 16IAX10H with an Intel Core Ultra 9 275HX CPU (24 total cores: 8P+16E) and 32 GiB RAM. Our evaluation is restricted to CPU-based architectures to maintain a direct comparison between our custom concurrency control strategies. Although GPU-acceleration is a common optimization for batch ANN search, implementing our proposed fine-grained locking and optimistic retry mechanisms within GPU kernels involves significant architectural complexity that we reserve for future work.
 
