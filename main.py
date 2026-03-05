@@ -2085,20 +2085,31 @@ def _run_single_dataset(args, dataset_path):
         print(f"Saved {throughput_path}")
 
         # Plot 2: Conflict Rates (Optimistic only)
+        # Color encodes index type; linestyle encodes granularity.
+        _CONFLICT_COLOR = {"HNSW": "#1f77b4", "IVF": "#ff7f0e"}
+        _CONFLICT_LS = {"coarse": "-", "fine": "--"}
+
+        def _conflict_style(name):
+            upper = name.upper()
+            color = _CONFLICT_COLOR["HNSW"] if "HNSW" in upper else _CONFLICT_COLOR["IVF"]
+            ls = _CONFLICT_LS["fine"] if "FINE" in upper else _CONFLICT_LS["coarse"]
+            label = name.replace("Optimistic", "").replace("Opt", "").strip()
+            return color, ls, label
+
         plt.figure(figsize=(8, 6))
         ax = plt.gca()
         has_conflicts = False
         for name, conflicts in results_cache["conflicts"].items():
             if "Opt" in name:
-                style_cfg = get_plot_style(name, results_cache["external_names"])
+                color, ls, label = _conflict_style(name)
                 plt.plot(
                     THREAD_COUNTS,
                     conflicts,
-                    label=name,
-                    color=style_cfg["color"],
-                    linestyle=style_cfg["linestyle"],
-                    marker="x",
-                    alpha=style_cfg["alpha"],
+                    label=label,
+                    color=color,
+                    linestyle=ls,
+                    marker="o",
+                    markersize=4,
                 )
                 has_conflicts = True
 
@@ -2106,9 +2117,7 @@ def _run_single_dataset(args, dataset_path):
             plt.xlabel("Threads")
             plt.ylabel("Conflict Rate (%)")
             plt.title("Conflict Rate (Optimistic)")
-            series_legend = ax.legend(loc="best")
-            ax.add_artist(series_legend)
-            add_semantic_style_legend(ax)
+            ax.legend(loc="best")
             plt.grid(True)
             plt.tight_layout()
             conflict_path = os.path.join(plot_dir, "conflict_rate.svg")
