@@ -59,13 +59,15 @@ def generate_concurrency_viz(
     points = np.array([c.centroid for c in cells], dtype=float)
 
     # Mirror points across all four edges so every original region is finite
-    mirrored = np.vstack([
-        points,
-        np.column_stack([-points[:, 0], points[:, 1]]),
-        np.column_stack([2 * width - points[:, 0], points[:, 1]]),
-        np.column_stack([points[:, 0], -points[:, 1]]),
-        np.column_stack([points[:, 0], 2 * height - points[:, 1]]),
-    ])
+    mirrored = np.vstack(
+        [
+            points,
+            np.column_stack([-points[:, 0], points[:, 1]]),
+            np.column_stack([2 * width - points[:, 0], points[:, 1]]),
+            np.column_stack([points[:, 0], -points[:, 1]]),
+            np.column_stack([points[:, 0], 2 * height - points[:, 1]]),
+        ]
+    )
 
     vor = Voronoi(mirrored)
 
@@ -76,12 +78,15 @@ def generate_concurrency_viz(
         CellState.IDLE: 0,
     }
 
-    svg = ET.Element("svg", attrib={
-        "xmlns": "http://www.w3.org/2000/svg",
-        "width": str(width),
-        "height": str(height),
-        "viewBox": f"0 0 {width} {height}",
-    })
+    svg = ET.Element(
+        "svg",
+        attrib={
+            "xmlns": "http://www.w3.org/2000/svg",
+            "width": str(width),
+            "height": str(height),
+            "viewBox": f"0 0 {width} {height}",
+        },
+    )
 
     # Filled regions
     for i, cell in enumerate(cells):
@@ -91,11 +96,15 @@ def generate_concurrency_viz(
             continue
         verts = vor.vertices[verts_idx]
         pts_str = " ".join(f"{x:.2f},{y:.2f}" for x, y in verts)
-        ET.SubElement(svg, "polygon", attrib={
-            "points": pts_str,
-            "fill": _rgb(NilVecTheme.COLORS[cell.state]),
-            "stroke": "none",
-        })
+        ET.SubElement(
+            svg,
+            "polygon",
+            attrib={
+                "points": pts_str,
+                "fill": _rgb(NilVecTheme.COLORS[cell.state]),
+                "stroke": "none",
+            },
+        )
 
     # Ridge lines between pairs of original cells only
     for (p1, p2), (v1, v2) in zip(vor.ridge_points, vor.ridge_vertices):
@@ -105,8 +114,10 @@ def generate_concurrency_viz(
         x1, y1 = vor.vertices[v1]
         x2, y2 = vor.vertices[v2]
         attrs = {
-            "x1": f"{x1:.2f}", "y1": f"{y1:.2f}",
-            "x2": f"{x2:.2f}", "y2": f"{y2:.2f}",
+            "x1": f"{x1:.2f}",
+            "y1": f"{y1:.2f}",
+            "x2": f"{x2:.2f}",
+            "y2": f"{y2:.2f}",
             "stroke": _rgb(NilVecTheme.STROKES[best.state]),
             "stroke-width": str(border_width),
         }
@@ -118,24 +129,42 @@ def generate_concurrency_viz(
     for cell in cells:
         cx, cy = cell.centroid
         dot_color = _rgb(NilVecTheme.STROKES[cell.state])
-        ET.SubElement(svg, "circle", attrib={
-            "cx": str(cx), "cy": str(cy), "r": "3",
-            "fill": dot_color,
-        })
+        ET.SubElement(
+            svg,
+            "circle",
+            attrib={
+                "cx": str(cx),
+                "cy": str(cy),
+                "r": "3",
+                "fill": dot_color,
+            },
+        )
 
         if mode == ConcurrencyMode.OPTIMISTIC:
             v_text = " ".join(str(v) for v in cell.versions)
-            ET.SubElement(svg, "text", attrib={
-                "x": str(cx + 8), "y": str(cy + 4),
-                "font-family": "monospace", "font-size": "13",
-                "fill": "rgb(40,40,40)",
-            }).text = v_text
+            ET.SubElement(
+                svg,
+                "text",
+                attrib={
+                    "x": str(cx + 8),
+                    "y": str(cy + 4),
+                    "font-family": "monospace",
+                    "font-size": "13",
+                    "fill": "rgb(40,40,40)",
+                },
+            ).text = v_text
             if cell.state == CellState.CONFLICT:
-                ET.SubElement(svg, "text", attrib={
-                    "x": str(cx + 8), "y": str(cy + 14),
-                    "font-family": "monospace", "font-size": "9",
-                    "fill": dot_color,
-                }).text = "Retry"
+                ET.SubElement(
+                    svg,
+                    "text",
+                    attrib={
+                        "x": str(cx + 8),
+                        "y": str(cy + 14),
+                        "font-family": "monospace",
+                        "font-size": "9",
+                        "fill": dot_color,
+                    },
+                ).text = "Retry"
         else:
             label = cell.label
             if not label:
@@ -146,11 +175,17 @@ def generate_concurrency_viz(
                 elif cell.state == CellState.CONFLICT:
                     label = "Conflict"
             if label:
-                ET.SubElement(svg, "text", attrib={
-                    "x": str(cx + 8), "y": str(cy + 4),
-                    "font-family": "monospace", "font-size": "13",
-                    "fill": dot_color,
-                }).text = label
+                ET.SubElement(
+                    svg,
+                    "text",
+                    attrib={
+                        "x": str(cx + 8),
+                        "y": str(cy + 4),
+                        "font-family": "monospace",
+                        "font-size": "13",
+                        "fill": dot_color,
+                    },
+                ).text = label
 
     ET.indent(svg)
     ET.ElementTree(svg).write(output_path, xml_declaration=True, encoding="unicode")
@@ -170,13 +205,17 @@ if __name__ == "__main__":
     ]
 
     generate_concurrency_viz(
-        600, 500, query_list,
+        600,
+        500,
+        query_list,
         "paper/plots/voronoi_pessimistic.svg",
         ConcurrencyMode.PESSIMISTIC,
     )
 
     generate_concurrency_viz(
-        600, 500, query_list,
+        600,
+        500,
+        query_list,
         "paper/plots/voronoi_optimistic.svg",
         ConcurrencyMode.OPTIMISTIC,
     )

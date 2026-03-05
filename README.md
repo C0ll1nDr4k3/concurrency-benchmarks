@@ -174,15 +174,11 @@ Recall vs. QPS.
 
 ## Testing
 
-````bash
+```bash
 export PYTHONPATH=$PYTHONPATH:$(pwd)/builddir
 uv run pytest
-
-## Code Formatting
-
-```bash
 clang-format -i **/*.cpp **/*.hpp && uv format
-````
+```
 
 ## Paper
 

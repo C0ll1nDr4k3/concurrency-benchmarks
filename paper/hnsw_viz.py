@@ -4,9 +4,11 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import List, Tuple
 
+
 class ConcurrencyMode(Enum):
     PESSIMISTIC = "pessimistic"
     OPTIMISTIC = "optimistic"
+
 
 class LayerState(Enum):
     IDLE = "idle"
@@ -14,22 +16,26 @@ class LayerState(Enum):
     WRITE_LOCKED = "write_locked"
     CONFLICT = "conflict"
 
+
 @dataclass
 class HNSWLayer:
     layer: int
     state: LayerState = LayerState.IDLE
     versions: tuple = (0,)  # used in optimistic mode
 
+
 @dataclass
 class HNSWNode:
     id: int
     max_layer: int  # highest layer this node belongs to
+
 
 @dataclass
 class HNSWEdge:
     src: int
     dst: int
     layer: int
+
 
 class NilVecTheme:
     BG = {
@@ -55,6 +61,7 @@ class NilVecTheme:
     TEXT_DARK = (40, 40, 40)
     TEXT_LAYER = (80, 80, 100)
 
+
 def generate_hnsw_viz(
     width: int,
     height: int,
@@ -74,7 +81,7 @@ def generate_hnsw_viz(
 
     try:
         font_path = "/System/Library/Fonts/SFNSMono.ttf"
-        font_main  = ImageFont.truetype(font_path, int(10 * scale))
+        font_main = ImageFont.truetype(font_path, int(10 * scale))
         font_label = ImageFont.truetype(font_path, int(8.5 * scale))
     except:
         font_main = font_label = ImageFont.load_default()
@@ -83,18 +90,17 @@ def generate_hnsw_viz(
     layer_map = {l.layer: l for l in layers}
 
     layer_nodes: List[List[HNSWNode]] = [
-        [n for n in nodes if n.max_layer >= layer]
-        for layer in range(num_layers)
+        [n for n in nodes if n.max_layer >= layer] for layer in range(num_layers)
     ]
 
-    margin_x    = int(40 * scale)
-    margin_top  = int(20 * scale)
-    margin_bot  = int(20 * scale)
-    layer_gap   = int(12 * scale)
-    total_gap   = layer_gap * (num_layers - 1)
-    layer_h     = int((sh - margin_top - margin_bot - total_gap) / num_layers)
-    oval_rx     = int(26 * scale)
-    oval_ry     = int(13 * scale)
+    margin_x = int(40 * scale)
+    margin_top = int(20 * scale)
+    margin_bot = int(20 * scale)
+    layer_gap = int(12 * scale)
+    total_gap = layer_gap * (num_layers - 1)
+    layer_h = int((sh - margin_top - margin_bot - total_gap) / num_layers)
+    oval_rx = int(26 * scale)
+    oval_ry = int(13 * scale)
 
     def layer_y_range(layer: int) -> Tuple[int, int]:
         idx = num_layers - 1 - layer  # layer 0 at bottom
@@ -116,7 +122,7 @@ def generate_hnsw_viz(
     # 1. Layer bands
     for lyr in layers:
         top, bot = layer_y_range(lyr.layer)
-        bg     = NilVecTheme.BG[lyr.state]
+        bg = NilVecTheme.BG[lyr.state]
         border = NilVecTheme.BORDER[lyr.state]
         stroke = NilVecTheme.STROKE[lyr.state]
 
@@ -140,7 +146,8 @@ def generate_hnsw_viz(
             lbl = f"Layer {lyr.layer}" + (f"  [{state_str}]" if state_str else "")
             draw.text(
                 (margin_x // 2 + int(6 * scale), top + int(5 * scale)),
-                lbl, fill=stroke if state_str else NilVecTheme.TEXT_LAYER,
+                lbl,
+                fill=stroke if state_str else NilVecTheme.TEXT_LAYER,
                 font=font_label,
             )
         else:
@@ -149,12 +156,13 @@ def generate_hnsw_viz(
             lbl = f"Layer {lyr.layer}  [{v_str}{retry}]"
             draw.text(
                 (margin_x // 2 + int(6 * scale), top + int(5 * scale)),
-                lbl, fill=stroke if lyr.state != LayerState.IDLE else NilVecTheme.TEXT_LAYER,
+                lbl,
+                fill=stroke if lyr.state != LayerState.IDLE else NilVecTheme.TEXT_LAYER,
                 font=font_label,
             )
 
     # 2. Promotion lines (dashed, between layer bands)
-    dash_on  = int(5 * scale)
+    dash_on = int(5 * scale)
     dash_off = int(4 * scale)
     for node in nodes:
         for layer in range(node.max_layer):
@@ -167,21 +175,23 @@ def generate_hnsw_viz(
                 if drawing:
                     ya = int(y0 + d * (y1 - y0) / total)
                     yb = int(y0 + (d + seg) * (y1 - y0) / total)
-                    draw.line([(x0, ya), (x0, yb)],
-                              fill=NilVecTheme.PROMO_LINE,
-                              width=max(1, int(1 * scale)))
+                    draw.line(
+                        [(x0, ya), (x0, yb)],
+                        fill=NilVecTheme.PROMO_LINE,
+                        width=max(1, int(1 * scale)),
+                    )
                 d += seg
                 drawing = not drawing
 
     # 3. Edges (color from their layer's state)
     for edge in edges:
-        lyr   = layer_map[edge.layer]
+        lyr = layer_map[edge.layer]
         color = NilVecTheme.STROKE[lyr.state]
         x0, y0 = node_center(edge.src, edge.layer)
         x1, y1 = node_center(edge.dst, edge.layer)
 
         if mode == ConcurrencyMode.OPTIMISTIC:
-            total = ((x1 - x0)**2 + (y1 - y0)**2) ** 0.5
+            total = ((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5
             if total == 0:
                 continue
             dash_len = int(10 * scale)
@@ -192,9 +202,12 @@ def generate_hnsw_viz(
                 t1 = min((i + 0.5) / (steps + 1), 1.0)
                 if drawing:
                     draw.line(
-                        [(int(x0 + t0*(x1-x0)), int(y0 + t0*(y1-y0))),
-                         (int(x0 + t1*(x1-x0)), int(y0 + t1*(y1-y0)))],
-                        fill=color, width=max(1, int(1.2 * scale)),
+                        [
+                            (int(x0 + t0 * (x1 - x0)), int(y0 + t0 * (y1 - y0))),
+                            (int(x0 + t1 * (x1 - x0)), int(y0 + t1 * (y1 - y0))),
+                        ],
+                        fill=color,
+                        width=max(1, int(1.2 * scale)),
                     )
                 drawing = not drawing
         else:
@@ -204,7 +217,7 @@ def generate_hnsw_viz(
     for node in nodes:
         for layer in range(node.max_layer + 1):
             cx, cy = node_center(node.id, layer)
-            lyr    = layer_map[layer]
+            lyr = layer_map[layer]
             stroke = NilVecTheme.STROKE[lyr.state]
             draw.ellipse(
                 [cx - oval_rx, cy - oval_ry, cx + oval_rx, cy + oval_ry],
@@ -222,8 +235,8 @@ if __name__ == "__main__":
 
     layers = [
         HNSWLayer(0, LayerState.WRITE_LOCKED, versions=(14, 15)),
-        HNSWLayer(1, LayerState.READ_LOCKED,  versions=(8,)),
-        HNSWLayer(2, LayerState.IDLE,          versions=(3,)),
+        HNSWLayer(1, LayerState.READ_LOCKED, versions=(8,)),
+        HNSWLayer(2, LayerState.IDLE, versions=(3,)),
     ]
 
     nodes = [
@@ -238,16 +251,29 @@ if __name__ == "__main__":
     ]
 
     edges = [
-        HNSWEdge(0, 1, 0), HNSWEdge(1, 2, 0), HNSWEdge(2, 3, 0),
-        HNSWEdge(3, 4, 0), HNSWEdge(4, 5, 0), HNSWEdge(5, 6, 0),
-        HNSWEdge(6, 7, 0), HNSWEdge(0, 4, 0), HNSWEdge(2, 6, 0),
-        HNSWEdge(1, 3, 1), HNSWEdge(3, 5, 1), HNSWEdge(5, 7, 1), HNSWEdge(1, 7, 1),
+        HNSWEdge(0, 1, 0),
+        HNSWEdge(1, 2, 0),
+        HNSWEdge(2, 3, 0),
+        HNSWEdge(3, 4, 0),
+        HNSWEdge(4, 5, 0),
+        HNSWEdge(5, 6, 0),
+        HNSWEdge(6, 7, 0),
+        HNSWEdge(0, 4, 0),
+        HNSWEdge(2, 6, 0),
+        HNSWEdge(1, 3, 1),
+        HNSWEdge(3, 5, 1),
+        HNSWEdge(5, 7, 1),
+        HNSWEdge(1, 7, 1),
         HNSWEdge(1, 7, 2),
     ]
 
     for m in ConcurrencyMode:
         generate_hnsw_viz(
-            600, 480, layers, nodes, edges,
+            600,
+            480,
+            layers,
+            nodes,
+            edges,
             f"paper/plots/hnsw_{m.value}.png",
             mode=m,
         )

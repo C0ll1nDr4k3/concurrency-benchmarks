@@ -2,9 +2,10 @@
  * @file ivfflat_fine_pessimistic.hpp
  * @brief IVFFlat implementation with fine-grained pessimistic concurrency.
  *
- * Uses per-bucket read-write locks:
- * - Searches lock only the buckets being probed (shared)
- * - Insertions lock only the target bucket (exclusive)
+ * Uses per-node read-write locks:
+ * - Each vector is stored in a Node with its own shared_mutex
+ * - Searches lock individual nodes (shared) during distance computation
+ * - Insertions lock only the target bucket (exclusive) for list append
  * - Centroids are immutable after training
  */
 
@@ -12,8 +13,9 @@
 
 #include <algorithm>
 #include <cassert>
+#include <memory>
 #include <mutex>
-#include <numeric>
+
 #include <shared_mutex>
 #include <vector>
 #include "common.hpp"
@@ -90,18 +92,22 @@ class IVFFlatFinePessimistic {
   }
 
   /**
-   * @brief Insert a vector (locks only target bucket).
+   * @brief Insert a vector (per-node allocation + per-bucket append).
    */
   NodeId insert(std::span<const T> data) {
     assert(data.size() == dim_);
     assert(trained_);
 
-    // Allocate vector ID atomically
+    // Construct node fully before making it visible
+    auto node = std::make_unique<Node>();
+    node->vector.assign(data.begin(), data.end());
+
+    // Allocate node ID under brief exclusive lock
     NodeId new_id;
     {
-      std::unique_lock lock(vectors_mutex_);
-      new_id = static_cast<NodeId>(vectors_.size());
-      vectors_.emplace_back(data.begin(), data.end());
+      std::unique_lock lock(nodes_mutex_);
+      new_id = static_cast<NodeId>(nodes_.size());
+      nodes_.push_back(std::move(node));
     }
 
     // Find target bucket (centroids are immutable, no lock needed)
@@ -117,7 +123,7 @@ class IVFFlatFinePessimistic {
   }
 
   /**
-   * @brief Search for k nearest neighbors (locks only probed buckets).
+   * @brief Search for k nearest neighbors (per-node shared locks).
    */
   SearchResult search(std::span<const T> query, size_t k) const {
     if (!trained_) {
@@ -139,31 +145,48 @@ class IVFFlatFinePessimistic {
 
     MaxHeap results;
 
-    // Search each selected bucket with shared lock
+    // Search each selected bucket
     for (size_t i = 0; i < std::min(nprobe_, centroid_candidates.size()); ++i) {
       size_t bucket_idx = centroid_candidates[i].id;
 
-      // Copy bucket contents under shared lock
+      // Copy bucket ID list under short shared lock
       std::vector<NodeId> bucket_copy;
       {
         std::shared_lock lock(bucket_mutexes_[bucket_idx]);
         bucket_copy = buckets_[bucket_idx];
       }
 
-      // Compute distances without holding lock
-      for (NodeId vec_id : bucket_copy) {
-        std::vector<T> vec_copy;
-        {
-          std::shared_lock lock(vectors_mutex_);
-          if (vec_id >= vectors_.size())
-            continue;
-          vec_copy = vectors_[vec_id];
+      // Gather stable Node* pointers under brief shared lock on nodes_
+      size_t bucket_size = bucket_copy.size();
+      std::vector<Node*> node_ptrs(bucket_size);
+      {
+        std::shared_lock lock(nodes_mutex_);
+        for (size_t j = 0; j < bucket_size; ++j) {
+          NodeId vec_id = bucket_copy[j];
+          if (vec_id < nodes_.size()) {
+            node_ptrs[j] = nodes_[vec_id].get();
+          } else {
+            node_ptrs[j] = nullptr;
+          }
+        }
+      }
+
+      // Compute distances with per-node shared locks (no global lock held)
+      for (size_t j = 0; j < bucket_size; ++j) {
+        if (!node_ptrs[j])
+          continue;
+
+        // Prefetch ahead
+        if (j + 4 < bucket_size && node_ptrs[j + 4]) {
+          __builtin_prefetch(node_ptrs[j + 4]->vector.data(), 0, 3);
         }
 
-        float dist = squared_distance(query, std::span<const T>(vec_copy));
+        Node* node = node_ptrs[j];
+        std::shared_lock lock(node->mutex);
+        float dist = squared_distance(query, std::span<const T>(node->vector));
 
         if (results.size() < k || dist < results.top().distance) {
-          results.push({vec_id, dist});
+          results.push({bucket_copy[j], dist});
           if (results.size() > k) {
             results.pop();
           }
@@ -191,8 +214,8 @@ class IVFFlatFinePessimistic {
   }
 
   size_t size() const {
-    std::shared_lock lock(vectors_mutex_);
-    return vectors_.size();
+    std::shared_lock lock(nodes_mutex_);
+    return nodes_.size();
   }
 
   bool is_trained() const { return trained_; }
@@ -202,6 +225,14 @@ class IVFFlatFinePessimistic {
   size_t nlist() const { return nlist_; }
 
  private:
+  /**
+   * @brief Per-node storage with its own lock.
+   */
+  struct Node {
+    std::vector<T> vector;
+    mutable std::shared_mutex mutex;
+  };
+
   std::vector<std::vector<float>> kmeans_plusplus_init(
       const std::vector<std::vector<T>>& data) {
     std::vector<std::vector<float>> centroids;
@@ -271,10 +302,10 @@ class IVFFlatFinePessimistic {
 
   std::vector<std::vector<float>> centroids_;
   std::vector<std::vector<NodeId>> buckets_;
-  std::vector<std::vector<T>> vectors_;
+  std::vector<std::unique_ptr<Node>> nodes_;
 
   mutable std::mutex train_mutex_;
-  mutable std::shared_mutex vectors_mutex_;
+  mutable std::shared_mutex nodes_mutex_;
   std::unique_ptr<std::shared_mutex[]>
       bucket_mutexes_;  // NOLINT(modernize-avoid-c-arrays)
   mutable std::mt19937 rng_;

@@ -14,7 +14,6 @@
 #include <cassert>
 #include <memory>
 #include <mutex>
-#include <numeric>
 #include <shared_mutex>
 #include <vector>
 #include "common.hpp"
@@ -157,7 +156,18 @@ class IVFFlatCoarsePessimistic {
       // Hold bucket lock for the full scan of this bucket
       std::shared_lock bkt_lock(bucket_mutexes_[bucket_idx]);
 
-      for (NodeId vec_id : buckets_[bucket_idx]) {
+      const auto& bucket_vecs = buckets_[bucket_idx];
+      size_t bucket_size = bucket_vecs.size();
+
+      for (size_t j = 0; j < bucket_size; ++j) {
+        if (j + 4 < bucket_size) {
+          NodeId prefetch_id = bucket_vecs[j + 4];
+          if (prefetch_id < vectors_.size()) {
+            __builtin_prefetch(vectors_[prefetch_id].data(), 0, 3);
+          }
+        }
+
+        NodeId vec_id = bucket_vecs[j];
         float dist =
             squared_distance(query, std::span<const T>(vectors_[vec_id]));
 

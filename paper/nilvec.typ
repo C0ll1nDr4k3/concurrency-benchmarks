@@ -83,7 +83,7 @@ This gap motivates our systematic exploration of the concurrency control design 
 
 == Index Implementations
 
-Each index family (IVFFlat and HNSW) is implemented with four concurrency strategies spanning two axes: locking granularity (coarse vs. fine) and conflict resolution (pessimistic vs. optimistic).
+Each index family (IVFFlat and HNSW) is implemented with four concurrency strategies spanning two axes: locking granularity (coarse vs. fine) and conflict resolution (pessimistic vs. optimistic). All variants use SIMD-accelerated distance computation via a common module. All IVFFlat variants additionally apply four-element prefetching in the scan inner loop.
 
 #figure(
   grid(
@@ -120,8 +120,7 @@ T3: validate green: 12 = 12
   caption: [
     Geometric interpretation of IVFFlat coarse locking strategies over a
     Voronoi partition. _Pessimistic_: each cell is guarded by a mutex;
-    readers acquire a shared lock and writers an exclusive lock, so
-    concurrent operations on disjoint cells never contend. _Optimistic_:
+    readers acquire a shared lock and writers an exclusive lock. _Optimistic_:
     threads snapshot the cell version before operating and validate on
     commit; a writer that advances the version mid-search forces the reader
     to retry.
@@ -150,7 +149,7 @@ The primary workload consists of a concurrent mix of document insertions and app
 
 Standard database benchmarks model production workloads as overwhelmingly read-heavy. YCSB Workload B (95% read, 5% update) and Workload D (95% read, 5% insert) represent the read-mostly tier of the Yahoo! Cloud Serving Benchmark suite @cooper2010ycsb, and even the "update-heavy" Workload A allocates only 50% of operations to writes. Production vector databases skew further toward reads: ingestion is typically batched or periodic, while queries arrive continuously. Our 1--5% write range falls within this production regime. However, our goal is to stress concurrency control mechanisms, not to replicate a particular deployment profile. By ramping the write ratio across thread counts, we ensure that write-write and read-write conflicts increase with parallelism, exposing scaling bottlenecks that a fixed low write ratio would mask at higher thread counts.
 
-We evaluate our implementations using the SIFT-128 @annbench_sift128, Fashion-MNIST-784 @annbench_fashion784 @xiao2017fashionmnist, GloVe @annbench_glove100 @annbench_glove25, GIST-960 @annbench_gist960, NYTimes-256 @annbench_nytimes256, and MNIST-784 @annbench_mnist784 datasets.
+We evaluate our implementations using the SIFT-128 @annbench_sift128, Fashion-MNIST-784 @xiao2017fashionmnist, GloVe @annbench_glove100 @annbench_glove25, GIST-960 @annbench_gist960, NYTimes-256 @annbench_nytimes256, and MNIST-784 @annbench_mnist784 datasets.
 
 All experiments were conducted on a Lenovo Legion Pro 7i 16IAX10H with an Intel Core Ultra 9 275HX CPU (24 total cores: 8P+16E) and 32 GiB RAM. Our evaluation is restricted to CPU-based architectures to maintain a direct comparison between our custom concurrency control strategies. Although GPU-acceleration is a common optimization for batch ANN search, implementing our proposed fine-grained locking and optimistic retry mechanisms within GPU kernels involves significant architectural complexity that we reserve for future work.
 

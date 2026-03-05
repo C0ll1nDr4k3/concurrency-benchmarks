@@ -44,11 +44,11 @@ class HNSWIVFCoarsePessimistic {
 
  public:
   HNSWIVFCoarsePessimistic(Dim dim,
-                            size_t M = 16,
-                            size_t ef_construction = 200,
-                            float mL = 0.0f,
-                            size_t nprobe = 1,
-                            int max_layers = 16)
+                           size_t M = 16,
+                           size_t ef_construction = 200,
+                           float mL = 0.0f,
+                           size_t nprobe = 1,
+                           int max_layers = 16)
       : dim_(dim),
         M_(M),
         M_max0_(2 * M),
@@ -124,9 +124,9 @@ class HNSWIVFCoarsePessimistic {
       }
     }
 
-    // Phase 2: Search and connect at upper layers [min(new_level, max_level)..1]
-    for (int level = std::min(new_level, curr_max_level); level >= 1;
-         --level) {
+    // Phase 2: Search and connect at upper layers [min(new_level,
+    // max_level)..1]
+    for (int level = std::min(new_level, curr_max_level); level >= 1; --level) {
       std::unique_lock layer_lock(*layer_mutexes_[level]);
 
       auto candidates = search_layer(data, curr_entry, ef_construction_, level);
@@ -733,7 +733,7 @@ class HNSWIVFCoarsePessimistic {
   std::atomic<int> max_level_;
   std::vector<std::vector<T>> vectors_;
   std::vector<std::vector<std::vector<NodeId>>>
-      neighbors_;               // [node][level][neighbor]
+      neighbors_;                 // [node][level][neighbor]
   std::vector<int> node_levels_;  // level assigned to each node
   std::vector<bool> deleted_;     // tombstone flags
 
@@ -741,8 +741,10 @@ class HNSWIVFCoarsePessimistic {
   // partitions_ is retained for the partition registry but no longer stores
   // node lists -- partition_of_ is the authoritative assignment.
   std::vector<std::vector<NodeId>> partitions_;
-  std::unordered_map<NodeId, size_t> partition_index_;  // center -> partition idx
-  std::vector<size_t> partition_of_;  // node -> partition idx (NO_PARTITION if unassigned)
+  std::unordered_map<NodeId, size_t>
+      partition_index_;  // center -> partition idx
+  std::vector<size_t>
+      partition_of_;  // node -> partition idx (NO_PARTITION if unassigned)
   std::vector<NodeId> unassigned_;
 
   // Concurrency control

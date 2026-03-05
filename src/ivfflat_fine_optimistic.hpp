@@ -2,9 +2,10 @@
  * @file ivfflat_fine_optimistic.hpp
  * @brief IVFFlat implementation with fine-grained optimistic concurrency.
  *
- * Uses per-bucket versioning with optimistic reads:
- * - Searches read bucket contents optimistically, retry on version mismatch
- * - Insertions update bucket version using even/odd protocol
+ * Uses per-node versioning with optimistic reads:
+ * - Each vector is stored in a Node with its own version counter
+ * - Searches validate per-node versions after reading vector data
+ * - Per-bucket versioning protects bucket list reads
  * - Centroids are immutable after training
  */
 
@@ -13,8 +14,9 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <memory>
 #include <mutex>
-#include <numeric>
+#include <shared_mutex>
 #include <vector>
 #include "common.hpp"
 
@@ -99,18 +101,25 @@ class IVFFlatFineOptimistic {
   }
 
   /**
-   * @brief Insert a vector with optimistic per-bucket versioning.
+   * @brief Insert a vector with per-node versioning.
    */
   NodeId insert(std::span<const T> data) {
     assert(data.size() == dim_);
     assert(trained_);
 
-    // Allocate vector ID atomically
+    // Construct node: version starts odd (under construction)
+    auto node = std::make_unique<Node>();
+    node->version.store(1, std::memory_order_relaxed);
+    node->vector.assign(data.begin(), data.end());
+    // Mark construction complete (even version)
+    node->version.store(2, std::memory_order_release);
+
+    // Allocate node ID
     NodeId new_id;
     {
-      std::unique_lock lock(vectors_mutex_);
-      new_id = static_cast<NodeId>(vectors_.size());
-      vectors_.emplace_back(data.begin(), data.end());
+      std::unique_lock lock(nodes_alloc_mutex_);
+      new_id = static_cast<NodeId>(nodes_.size());
+      nodes_.push_back(std::move(node));
     }
 
     // Find target bucket (centroids are immutable)
@@ -119,10 +128,8 @@ class IVFFlatFineOptimistic {
     // Lock bucket and update with versioning
     {
       std::unique_lock lock(bucket_mutexes_[bucket]);
-      // Mark write in progress (odd)
       bucket_versions_[bucket].fetch_add(1, std::memory_order_release);
       buckets_[bucket].push_back(new_id);
-      // Mark write complete (even)
       bucket_versions_[bucket].fetch_add(1, std::memory_order_release);
     }
 
@@ -130,7 +137,7 @@ class IVFFlatFineOptimistic {
   }
 
   /**
-   * @brief Search with optimistic per-bucket reads.
+   * @brief Search with per-bucket optimistic reads and per-node versioning.
    */
   SearchResult search(std::span<const T> query, size_t k) const {
     if (!trained_) {
@@ -178,8 +185,8 @@ class IVFFlatFineOptimistic {
   }
 
   size_t size() const {
-    std::unique_lock lock(vectors_mutex_);
-    return vectors_.size();
+    std::shared_lock lock(nodes_mutex_);
+    return nodes_.size();
   }
 
   bool is_trained() const { return trained_; }
@@ -192,6 +199,14 @@ class IVFFlatFineOptimistic {
   void reset_conflict_stats() { conflict_stats_.reset(); }
 
  private:
+  /**
+   * @brief Per-node storage with version counter.
+   */
+  struct Node {
+    std::vector<T> vector;
+    std::atomic<uint64_t> version{0};  // odd = under construction
+  };
+
   void search_bucket(size_t bucket_idx,
                      std::span<const T> query,
                      size_t k,
@@ -210,7 +225,7 @@ class IVFFlatFineOptimistic {
       // Read bucket contents
       std::vector<NodeId> bucket_copy = buckets_[bucket_idx];
 
-      // Verify version unchanged
+      // Verify bucket version unchanged
       uint64_t version_after =
           bucket_versions_[bucket_idx].load(std::memory_order_acquire);
       if (version_before != version_after) {
@@ -218,35 +233,47 @@ class IVFFlatFineOptimistic {
         continue;
       }
 
-      // Process vectors
+      // Gather stable Node* pointers under brief shared lock
       size_t bucket_size = bucket_copy.size();
-      for (size_t i = 0; i < bucket_size; ++i) {
-        if (i + 4 < bucket_size) {
-          // We can't safely prefetch the vector data here because we don't hold
-          // the vectors_mutex_ and the vector pointers might be reallocated if
-          // vectors_ resize. However, if vectors_ is stable or we assume resize
-          // is rare/handled, we might try. BUT: IVFFlatFineOptimistic takes a
-          // copy of the vector under lock.
+      std::vector<Node*> node_ptrs(bucket_size);
+      {
+        std::shared_lock lock(nodes_mutex_);
+        for (size_t j = 0; j < bucket_size; ++j) {
+          NodeId vec_id = bucket_copy[j];
+          if (vec_id < nodes_.size()) {
+            node_ptrs[j] = nodes_[vec_id].get();
+          } else {
+            node_ptrs[j] = nullptr;
+          }
+        }
+      }
+
+      // Process vectors with per-node version checks
+      for (size_t j = 0; j < bucket_size; ++j) {
+        if (!node_ptrs[j])
+          continue;
+
+        // Prefetch ahead
+        if (j + 4 < bucket_size && node_ptrs[j + 4]) {
+          __builtin_prefetch(node_ptrs[j + 4]->vector.data(), 0, 3);
         }
 
-        NodeId vec_id = bucket_copy[i];
-        std::vector<T> vec_copy;
-        {
-          std::unique_lock lock(vectors_mutex_);
-          if (vec_id >= vectors_.size())
-            continue;
+        Node* node = node_ptrs[j];
 
-          // Prefetching here is tricky because we copy the vector.
-          // Better optimization: Avoid the copy if possible, but that breaks
-          // the design. Given the constraints, we will just optimize the
-          // distance calc.
-          vec_copy = vectors_[vec_id];
-        }
+        // Check node version (skip if under construction)
+        uint64_t node_ver =
+            node->version.load(std::memory_order_acquire);
+        if (node_ver & 1)
+          continue;
 
-        float dist = squared_distance(query, std::span<const T>(vec_copy));
+        float dist = squared_distance(query, std::span<const T>(node->vector));
+
+        // Verify node version unchanged
+        if (node->version.load(std::memory_order_acquire) != node_ver)
+          continue;
 
         if (results.size() < k || dist < results.top().distance) {
-          results.push({vec_id, dist});
+          results.push({bucket_copy[j], dist});
           if (results.size() > k) {
             results.pop();
           }
@@ -255,18 +282,15 @@ class IVFFlatFineOptimistic {
       return;
     }
 
-    // Fallback to locked read
+    // Fallback: locked read of bucket
     std::unique_lock lock(bucket_mutexes_[bucket_idx]);
+    std::shared_lock nlock(nodes_mutex_);
     for (NodeId vec_id : buckets_[bucket_idx]) {
-      std::vector<T> vec_copy;
-      {
-        std::unique_lock vlock(vectors_mutex_);
-        if (vec_id >= vectors_.size())
-          continue;
-        vec_copy = vectors_[vec_id];
-      }
+      if (vec_id >= nodes_.size())
+        continue;
+      Node* node = nodes_[vec_id].get();
 
-      float dist = squared_distance(query, std::span<const T>(vec_copy));
+      float dist = squared_distance(query, std::span<const T>(node->vector));
 
       if (results.size() < k || dist < results.top().distance) {
         results.push({vec_id, dist});
@@ -347,10 +371,11 @@ class IVFFlatFineOptimistic {
 
   std::vector<std::vector<float>> centroids_;
   std::vector<std::vector<NodeId>> buckets_;
-  std::vector<std::vector<T>> vectors_;
+  std::vector<std::unique_ptr<Node>> nodes_;
 
   mutable std::mutex train_mutex_;
-  mutable std::mutex vectors_mutex_;
+  mutable std::shared_mutex nodes_mutex_;   // shared for pointer reads
+  mutable std::mutex nodes_alloc_mutex_;    // exclusive for allocation
   std::unique_ptr<std::atomic<uint64_t>[]>
       bucket_versions_;  // NOLINT(modernize-avoid-c-arrays)
   std::unique_ptr<std::mutex[]>

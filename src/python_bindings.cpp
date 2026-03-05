@@ -4,11 +4,11 @@
 #include "common.hpp"
 #include "flat_vanilla.hpp"
 #include "hnsw_coarse_optimistic.hpp"
-#include "hnswivf_coarse_pessimistic.hpp"
 #include "hnsw_coarse_pessimistic.hpp"
 #include "hnsw_fine_optimistic.hpp"
 #include "hnsw_fine_pessimistic.hpp"
 #include "hnsw_vanilla.hpp"
+#include "hnswivf_coarse_pessimistic.hpp"
 #include "ivfflat_coarse_optimistic.hpp"
 #include "ivfflat_coarse_pessimistic.hpp"
 #include "ivfflat_fine_optimistic.hpp"
@@ -199,8 +199,7 @@ PYBIND11_MODULE(_nilvec, m) {
             py::arg("query"), py::arg("k"), py::arg("ef") = 0,
             py::call_guard<py::gil_scoped_release>())
         .def(
-            "remove",
-            [](Index& self, NodeId id) { self.remove(id); },
+            "remove", [](Index& self, NodeId id) { self.remove(id); },
             py::call_guard<py::gil_scoped_release>())
         .def("size", &Index::size)
         .def("max_level", &Index::max_level)

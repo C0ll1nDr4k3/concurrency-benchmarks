@@ -44,7 +44,7 @@ class IVFFlatCoarseOptimistic {
         rng_(std::random_device{}()) {
     buckets_.resize(nlist_);
     bucket_versions_ =
-        std::make_unique<std::atomic<uint64_t>[]>(nlist_);  // NOLINT
+        std::make_unique<std::atomic<uint64_t>[]>(nlist_);     // NOLINT
     bucket_mutexes_ = std::make_unique<std::mutex[]>(nlist_);  // NOLINT
     fallback_mutexes_ =
         std::make_unique<std::shared_mutex[]>(nlist_);  // NOLINT

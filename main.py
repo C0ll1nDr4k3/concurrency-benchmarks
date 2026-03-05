@@ -34,42 +34,56 @@ build_dir = os.path.join(os.getcwd(), "builddir")
 sys.path.append(build_dir)
 
 # Add some initial color to verify it's working
-print(f"{Style.BRIGHT}{Fore.GREEN}NilVec Benchmark Suite Initializing...{Style.RESET_ALL}")
+print(
+    f"{Style.BRIGHT}{Fore.GREEN}NilVec Benchmark Suite Initializing...{Style.RESET_ALL}"
+)
 
 try:
     import faiss
 except ImportError:
-    print(f"{Fore.YELLOW}faiss not installed - skipping related benchmarks{Style.RESET_ALL}")
+    print(
+        f"{Fore.YELLOW}faiss not installed - skipping related benchmarks{Style.RESET_ALL}"
+    )
     faiss = None
 
 try:
     import usearch.index
 except ImportError:
-    print(f"{Fore.YELLOW}usearch not installed - skipping related benchmarks{Style.RESET_ALL}")
+    print(
+        f"{Fore.YELLOW}usearch not installed - skipping related benchmarks{Style.RESET_ALL}"
+    )
     usearch = None
 
 try:
     import pymilvus
 except ImportError:
-    print(f"{Fore.YELLOW}Milvus not installed - skipping related benchmarks{Style.RESET_ALL}")
+    print(
+        f"{Fore.YELLOW}Milvus not installed - skipping related benchmarks{Style.RESET_ALL}"
+    )
     pymilvus = None
 
 try:
     import weaviate
 except ImportError:
-    print(f"{Fore.YELLOW}Weaviate not installed - skipping related benchmarks{Style.RESET_ALL}")
+    print(
+        f"{Fore.YELLOW}Weaviate not installed - skipping related benchmarks{Style.RESET_ALL}"
+    )
     weaviate = None
 
 try:
     import redis
 except ImportError:
-    print(f"{Fore.YELLOW}Redis client not installed - skipping related benchmarks{Style.RESET_ALL}")
+    print(
+        f"{Fore.YELLOW}Redis client not installed - skipping related benchmarks{Style.RESET_ALL}"
+    )
     redis = None
 
 try:
     import duckdb
 except ImportError:
-    print(f"{Fore.YELLOW}duckdb not installed - skipping related benchmarks{Style.RESET_ALL}")
+    print(
+        f"{Fore.YELLOW}duckdb not installed - skipping related benchmarks{Style.RESET_ALL}"
+    )
     duckdb = None
 
 try:
@@ -678,7 +692,9 @@ def download_dataset(url, path):
                 f.write(chunk)
         print(f"{Fore.GREEN}Download complete.{Style.RESET_ALL}")
     else:
-        print(f"{Fore.RED}Failed to download dataset: {response.status_code}{Style.RESET_ALL}")
+        print(
+            f"{Fore.RED}Failed to download dataset: {response.status_code}{Style.RESET_ALL}"
+        )
         sys.exit(1)
 
 
@@ -1257,8 +1273,10 @@ def benchmark_recall_vs_qps(
     if index_args is None:
         index_args = []
 
-    print(f"\n{Style.BRIGHT}{Fore.CYAN}Benchmarking Recall vs QPS{Style.RESET_ALL}: "
-          f"{Style.BRIGHT}{Fore.MAGENTA}{index_name}{Style.RESET_ALL}")
+    print(
+        f"\n{Style.BRIGHT}{Fore.CYAN}Benchmarking Recall vs QPS{Style.RESET_ALL}: "
+        f"{Style.BRIGHT}{Fore.MAGENTA}{index_name}{Style.RESET_ALL}"
+    )
     recall_start_time = time.time()
 
     # helper to instantiate properly
@@ -1275,7 +1293,9 @@ def benchmark_recall_vs_qps(
     start = time.time()
     for vec in data:
         index.insert(vec)
-    print(f"  {Fore.BLUE}Insert time:{Style.RESET_ALL} {Fore.GREEN}{time.time() - start:.2f}s{Style.RESET_ALL}")
+    print(
+        f"  {Fore.BLUE}Insert time:{Style.RESET_ALL} {Fore.GREEN}{time.time() - start:.2f}s{Style.RESET_ALL}"
+    )
 
     results = []
 
@@ -1300,9 +1320,11 @@ def benchmark_recall_vs_qps(
         qps = len(queries) / duration
         recall = compute_recall(res_ids_list, gt, k)
 
-        print(f"  {Fore.WHITE}Params: {params}{Style.RESET_ALL} -> "
-              f"{Fore.BLUE}Recall:{Style.RESET_ALL} {Fore.GREEN}{recall:.4f}{Style.RESET_ALL}, "
-              f"{Fore.BLUE}QPS:{Style.RESET_ALL} {Fore.GREEN}{qps:.0f}{Style.RESET_ALL}")
+        print(
+            f"  {Fore.WHITE}Params: {params}{Style.RESET_ALL} -> "
+            f"{Fore.BLUE}Recall:{Style.RESET_ALL} {Fore.GREEN}{recall:.4f}{Style.RESET_ALL}, "
+            f"{Fore.BLUE}QPS:{Style.RESET_ALL} {Fore.GREEN}{qps:.0f}{Style.RESET_ALL}"
+        )
         results.append((recall, qps))
 
     recall_elapsed = time.time() - recall_start_time
@@ -1657,12 +1679,16 @@ def _run_single_dataset(args, dataset_path):
         if gt is None:
             gt = get_ground_truth(data, queries, K)
     else:
-        print(f"{Fore.CYAN}Generating {NUM_VECTORS} vectors (dim={DIM})...{Style.RESET_ALL}")
+        print(
+            f"{Fore.CYAN}Generating {NUM_VECTORS} vectors (dim={DIM})...{Style.RESET_ALL}"
+        )
         data = generate_data(NUM_VECTORS, DIM)
         queries = generate_data(NUM_QUERIES, DIM)
         gt = get_ground_truth(data, queries, K)
 
-    print(f"{Fore.WHITE}Dataset: N={NUM_VECTORS}, Q={NUM_QUERIES}, Dim={DIM}{Style.RESET_ALL}")
+    print(
+        f"{Fore.WHITE}Dataset: N={NUM_VECTORS}, Q={NUM_QUERIES}, Dim={DIM}{Style.RESET_ALL}"
+    )
 
     # Build per-dataset plot directory: paper/plots/{dataset}_{limit}
     _plot_limit = args.limit if args.limit > 0 else "full"
