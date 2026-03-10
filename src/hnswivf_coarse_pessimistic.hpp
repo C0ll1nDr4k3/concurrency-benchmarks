@@ -5,7 +5,7 @@
  *
  * Upper layers (>= 1) form a standard HNSW graph protected by per-layer
  * shared_mutex locks. Layer-0 edges are built identically to a standard HNSW
- * graph, but locking is per-partition rather than per-layer: each layer-1+
+ * graph, but locking is per-partition rather than per-layer: each layer-2+
  * node defines a partition, and the partition's lock protects the layer-0
  * edge lists of all nodes assigned to it.
  *
@@ -89,7 +89,7 @@ class HNSWIVFCoarsePessimistic {
                                              std::memory_order_acq_rel)) {
       max_level_.store(new_level, std::memory_order_release);
 
-      if (new_level >= 1) {
+      if (new_level >= 2) {
         std::unique_lock reg_lock(partition_registry_mutex_);
         size_t pidx = register_partition(new_id);
         partition_of_[new_id] = pidx;
@@ -115,7 +115,7 @@ class HNSWIVFCoarsePessimistic {
       std::shared_lock layer_lock(*layer_mutexes_[level]);
       curr_entry = greedy_search_layer(data, curr_entry, level);
 
-      if (level >= 1 && node_levels_[curr_entry] >= 1) {
+      if (level >= 2 && node_levels_[curr_entry] >= 2) {
         float d = compute_distance(data, curr_entry);
         if (d < nearest_partition_dist) {
           nearest_partition_dist = d;
@@ -145,7 +145,7 @@ class HNSWIVFCoarsePessimistic {
       }
 
       for (const auto& c : candidates) {
-        if (node_levels_[c.id] >= 1 && c.distance < nearest_partition_dist) {
+        if (node_levels_[c.id] >= 2 && c.distance < nearest_partition_dist) {
           nearest_partition_dist = c.distance;
           nearest_partition_node = c.id;
         }
@@ -160,7 +160,7 @@ class HNSWIVFCoarsePessimistic {
     // We need the assignment first so we know which partition lock protects
     // the new node's layer-0 edge list.
     size_t new_partition = NO_PARTITION;
-    if (new_level >= 1) {
+    if (new_level >= 2) {
       // This node becomes its own partition center
       std::unique_lock reg_lock(partition_registry_mutex_);
       new_partition = register_partition(new_id);
@@ -289,7 +289,7 @@ class HNSWIVFCoarsePessimistic {
     global_read_lock.unlock();
 
     // If this was a partition center, reassign its children
-    if (level >= 1) {
+    if (level >= 2) {
       std::unique_lock reg_lock(partition_registry_mutex_);
       auto it = partition_index_.find(id);
       if (it == partition_index_.end())
@@ -346,20 +346,20 @@ class HNSWIVFCoarsePessimistic {
 
     int curr_max_level = max_level_.load(std::memory_order_acquire);
 
-    // Phase 1: Greedy descent through upper layers to layer 1
-    for (int level = curr_max_level; level >= 2; --level) {
+    // Phase 1: Greedy descent through upper layers to layer 2
+    for (int level = curr_max_level; level >= 3; --level) {
       std::shared_lock layer_lock(*layer_mutexes_[level]);
       curr_entry = greedy_search_layer(query, curr_entry, level);
     }
 
-    // Phase 2: Beam search at layer 1 to find nprobe nearest partition centers
+    // Phase 2: Beam search at layer 2 to find nprobe nearest partition centers
     std::vector<NodeId> probe_centers;
 
-    if (curr_max_level >= 1) {
-      std::shared_lock layer_lock(*layer_mutexes_[1]);
+    if (curr_max_level >= 2) {
+      std::shared_lock layer_lock(*layer_mutexes_[2]);
       size_t np = nprobe_.load(std::memory_order_relaxed);
       size_t search_ef = std::max(np, ef);
-      auto candidates = search_layer(query, curr_entry, search_ef, 1);
+      auto candidates = search_layer(query, curr_entry, search_ef, 2);
 
       std::shared_lock reg_lock(partition_registry_mutex_);
       for (const auto& c : candidates) {
