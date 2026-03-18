@@ -20,9 +20,9 @@
   <circle cx="350" cy="150" r="3" fill="rgb(200,200,200)" />
   <text x="358" y="154" font-family="monospace" font-size="13" fill="rgb(40,40,40)">v8</text>
   <circle cx="180" cy="380" r="3" fill="rgb(180,140,0)" />
-  <text x="188" y="384" font-family="monospace" font-size="13" fill="rgb(40,40,40)">v15</text>
+  <text x="188" y="384" font-family="monospace" font-size="13" fill="rgb(40,40,40)">v14→v15</text>
   <circle cx="450" cy="420" r="3" fill="rgb(200,40,40)" />
-  <text x="458" y="424" font-family="monospace" font-size="13" fill="rgb(40,40,40)">v6</text>
+  <text x="458" y="424" font-family="monospace" font-size="13" fill="rgb(40,40,40)">v5→v6</text>
   <text x="458" y="434" font-family="monospace" font-size="9" fill="rgb(200,40,40)">Retry</text>
   <circle cx="100" cy="250" r="3" fill="rgb(200,200,200)" />
   <text x="108" y="254" font-family="monospace" font-size="13" fill="rgb(40,40,40)">v10</text>

@@ -261,8 +261,7 @@ class IVFFlatFineOptimistic {
         Node* node = node_ptrs[j];
 
         // Check node version (skip if under construction)
-        uint64_t node_ver =
-            node->version.load(std::memory_order_acquire);
+        uint64_t node_ver = node->version.load(std::memory_order_acquire);
         if (node_ver & 1)
           continue;
 
@@ -374,8 +373,8 @@ class IVFFlatFineOptimistic {
   std::vector<std::unique_ptr<Node>> nodes_;
 
   mutable std::mutex train_mutex_;
-  mutable std::shared_mutex nodes_mutex_;   // shared for pointer reads
-  mutable std::mutex nodes_alloc_mutex_;    // exclusive for allocation
+  mutable std::shared_mutex nodes_mutex_;  // shared for pointer reads
+  mutable std::mutex nodes_alloc_mutex_;   // exclusive for allocation
   std::unique_ptr<std::atomic<uint64_t>[]>
       bucket_versions_;  // NOLINT(modernize-avoid-c-arrays)
   std::unique_ptr<std::mutex[]>

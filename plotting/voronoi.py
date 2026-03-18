@@ -198,8 +198,8 @@ if __name__ == "__main__":
     query_list = [
         CellMetadata(0, (120, 100), CellState.READ_LOCKED, versions=("v12",)),
         CellMetadata(1, (350, 150), CellState.IDLE, versions=("v8",)),
-        CellMetadata(2, (180, 380), CellState.WRITE_LOCKED, versions=("v15",)),
-        CellMetadata(3, (450, 420), CellState.CONFLICT, versions=("v6",)),
+        CellMetadata(2, (180, 380), CellState.WRITE_LOCKED, versions=("v14→v15",)),
+        CellMetadata(3, (450, 420), CellState.CONFLICT, versions=("v5→v6",)),
         CellMetadata(4, (100, 250), CellState.IDLE, versions=("v10",)),
         CellMetadata(5, (500, 100), CellState.IDLE, versions=("v10",)),
     ]

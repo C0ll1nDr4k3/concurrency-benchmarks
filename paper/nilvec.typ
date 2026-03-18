@@ -69,7 +69,7 @@
 
 = Introduction
 
-As vector databases increasingly support streaming workloads, the need for concurrent queries against continuously updated indexes has become apparent @gong2025vstream. While approximate nearest neighbor (ANN) search has been extensively studied under the assumption of a static index @ma2025comprehensivesurveyvectordatabase, the concurrency control mechanisms required for dynamic workloads remain underexplored @singh2021freshdiskann. Existing systems either sacrifice read-write concurrency entirely or rely on batch processing strategies incompatible with streaming insertions. This paper systematically examines the design space of concurrency control for ANN indexes, focusing on the interplay between locking granularity and conflict resolution strategies.
+As vector databases increasingly support streaming workloads, the need for concurrent queries against continuously updated indexes has become apparent @gong2025vstream. While approximate nearest neighbor (ANN) search has been extensively studied under the assumption of a static index @ma2025comprehensivesurveyvectordatabase, the concurrency control mechanisms required for dynamic workloads remain underexplored @singh2021freshdiskann. Existing systems either sacrifice read-write concurrency entirely or rely on batch processing strategies incompatible with streaming insertions.
 
 Existing approaches to parallel ANN index construction fall short of these requirements. FAISS, a well-known example of fine-grained locking, utilizes this locking strictly for parallel index construction (protecting concurrent writers), rather than for isolation between readers and writers @douze2024faiss. Consequently, it does not support simultaneous search and update. Furthermore, while FAISS exploits thread-level parallelism to batch-process search queries, the search path itself is completely lock-free @faiss_indexhnsw.
 
@@ -77,7 +77,7 @@ ParlayANN takes a different approach, offering two strategies for parallel const
 
 JVector demonstrates near-linear scaling of nonblocking concurrent construction on SIFT-1M @jvector, but like FAISS and ParlayANN this targets build-time parallelism rather than online read-write concurrency.
 
-This gap motivates our systematic exploration of the concurrency control design space for online ANN indexes. We identify two key dimensions along which strategies may vary: locking granularity (coarse-grained at the partition or bucket level vs. fine-grained at the individual neighbor list level) and conflict resolution policy (optimistic with validation and retry vs. pessimistic with blocking) @kung1981optimistic. Combining these two dimensions yields four distinct strategies. We implement each strategy for both IVFFlat and HNSW indexes and evaluate their performance under mixed read-write workloads. Our evaluation provides the first empirical comparison of concurrency control approaches for streaming vector search.
+We address this gap directly. Concurrency control for ANN indexes varies along two axes: locking granularity (coarse-grained per partition or bucket vs. fine-grained per neighbor list) and conflict resolution (pessimistic blocking vs. optimistic validation and retry) @kung1981optimistic. We implement all four combinations for both IVFFlat and HNSW and benchmark them under mixed read-write workloads.
 
 = Methodology
 
@@ -109,8 +109,8 @@ Each index family (IVFFlat and HNSW) is implemented with four concurrency strate
       ```
       // red: v=5; green: v=12; yellow: v=14
       T1: search → snapshot red v=5
-      T2: insert → write to red, bump v: 5→6
-      T4: insert → write to yellow, bump v: 14→15
+      T2: insert → write to red v5→v6
+      T4: insert → write to yellow v14→v15
       T3: search → snapshot green v=12
       T1: validate red: 5 ≱ 6 → retry
       T3: validate green: 12 = 12
@@ -155,11 +155,11 @@ We evaluate each index configuration under two write-ratio bands, both ramping l
 
 - *Stress-test band (W: 20%--50%)*. The write ratio increases from 20% at 2 threads to 50% at 24 threads. At these ratios, write-write and read-write conflicts become frequent enough to expose behavioral differences between concurrency control strategies that the production band masks. This band is not intended to represent a deployment profile; it isolates the locking and conflict-resolution overhead that is the focus of this paper.
 
-We evaluate our implementations using the SIFT-128 @annbench_sift128, Fashion-MNIST-784 @xiao2017fashionmnist, GloVe @annbench_glove100 @annbench_glove25, GIST-960 @annbench_gist960, NYTimes-256 @annbench_nytimes256, and MNIST-784 @annbench_mnist784 datasets.
+We evaluate our implementations using the SIFT-128, Fashion-MNIST-784 @xiao2017fashionmnist, GloVe, GIST-960, NYTimes-256, and MNIST-784 datasets @annbenchmarks.
 
 == Measurement
 
-Each throughput data point proceeds in two phases. First, a _construction phase_ creates a fresh index, trains it (for IVF variants), and bulk-inserts the first 50% of the dataset into the shared index, single-threaded. This pre-load gives the index enough structure to serve queries before the timed phase begins. Build time covers this phase and is reported separately; it is excluded from the throughput calculation. Second, a _mixed-workload phase_ launches writer and reader threads concurrently against the pre-loaded index: writers insert the remaining vectors (split evenly across insert threads) while readers execute five full passes over the query set. All performance-critical C++ methods release the Python GIL, so threads achieve true parallelism. Throughput is computed as total operations (inserts plus searches) divided by the wall-clock duration of this second phase only.
+Each throughput data point proceeds in two phases. First, a _construction phase_ creates a fresh index, trains it (for IVF variants), and bulk-inserts the first 50% of the dataset into the shared index, single-threaded. This pre-load gives the index enough structure to serve queries before the timed phase begins. Build time covers this phase and is reported separately; it is excluded from the throughput calculation. Second, a _mixed-workload phase_ launches writer and reader threads concurrently against the pre-loaded index: writers insert the remaining vectors (split evenly across insert threads) while readers execute five full passes over the query set. All performance-critical C++ methods release the Python GIL, so threads achieve true parallelism. When a C++ call returns, however, the thread must reacquire the GIL before Python can dispatch the next operation; if another thread holds the GIL at that instant, the thread stalls despite having completed its index work. This queuing at the GIL boundary is absorbed into the wall-clock window, making absolute throughput figures a conservative lower bound on what the underlying indexes can sustain. Wall-clock time is retained rather than instrumented C++ time to maintain consistency with external library baselines (FAISS, USearch, Weaviate, Redis), which cannot be measured otherwise; since all implementations share the same harness overhead, relative comparisons remain valid. Throughput is computed as total operations (inserts plus searches) divided by the wall-clock duration of this second phase only.
 
 All indexes return $k = 10$ nearest neighbors per query. HNSW variants use $M = 16$ bidirectional links per node and $"ef"_"construction" = 200$. IVFFlat variants use $n_"list" = floor(sqrt(N))$ clusters, where $N$ is the number of indexed vectors, and $n_"probe" = 1$ for throughput benchmarks.
 

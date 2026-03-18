@@ -1629,9 +1629,7 @@ def _run_single_dataset(args, dataset_path):
             band_labels = ", ".join(format_band_label(b) for b in args._rw_bands)
             title = f"Throughput ({band_labels})"
         else:
-            title = (
-                f"Throughput (W:{args.rw_ratio:.1f}, R:{1.0 - args.rw_ratio:.1f})"
-            )
+            title = f"Throughput (W:{args.rw_ratio:.1f}, R:{1.0 - args.rw_ratio:.1f})"
 
         throughput_path = os.path.join(plot_dir, "throughput_scaling.svg")
         plot_throughput(
