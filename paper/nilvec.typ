@@ -155,7 +155,7 @@ We evaluate each index configuration under two write-ratio bands, both ramping l
 
 - *Stress-test band (W: 20%--50%)*. The write ratio increases from 20% at 2 threads to 50% at 24 threads. At these ratios, write-write and read-write conflicts become frequent enough to expose behavioral differences between concurrency control strategies that the production band masks. This band is not intended to represent a deployment profile; it isolates the locking and conflict-resolution overhead that is the focus of this paper.
 
-We evaluate our implementations using the SIFT-128, Fashion-MNIST-784 @xiao2017fashionmnist, GloVe, GIST-960, NYTimes-256, and MNIST-784 datasets @annbenchmarks.
+We evaluate our implementations using the SIFT-128 ($n = 1 thin 000 thin 000$), Fashion-MNIST-784 ($n = 60 thin 000$) @xiao2017fashionmnist, GloVe ($n = 1 thin 183 thin 514$), GIST-960 ($n = 1 thin 000 thin 000$), NYTimes-256 ($n = 290 thin 000$), and MNIST-784 ($n = 60 thin 000$) datasets @annbenchmarks.
 
 == Measurement
 
