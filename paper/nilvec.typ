@@ -185,6 +185,10 @@ Incidentally, the lower a dataset's throughput, the higher is cluster density.
       image("plots/fashion-mnist-784-euclidean_full/throughput_scaling.svg", width: 100%),
       caption: [Fashion-MNIST-784],
     ),
+    figure(
+      image("plots/fashion-mnist-784-euclidean_full/throughput_scaling.svg", width: 100%),
+      caption: [Fashion-MNIST-784],
+    )
   ),
   caption: [
     Throughput scaling with increasing numbers of threads for each index type, for tested full-run datasets.
