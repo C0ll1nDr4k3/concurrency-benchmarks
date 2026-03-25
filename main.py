@@ -11,6 +11,7 @@ import tempfile
 import threading
 import time
 import uuid
+from math import sqrt
 from urllib.parse import urlparse
 
 import colorama
@@ -1497,7 +1498,7 @@ def _run_single_dataset(args, dataset_path):
     hnsw_args = [16, 200]
     # IVFFlat: nlist=sqrt(N), nprobe variable
     nlist = int(NUM_VECTORS**0.5)
-    ivf_args = [nlist, 1]
+    ivf_args = [nlist, sqrt(nlist)]
 
     # --- Recall vs QPS ---
     if not args.skip_recall:
