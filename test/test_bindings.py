@@ -64,7 +64,7 @@ def test_hnswivf():
     dim = 64
     # Layer-2+ partitions: P(level>=2) ≈ 1/M^2 = 1/256 for M=16,
     # so 5000 vectors yield ~20 partitions.
-    index = nilvec.HNSWIVFCoarsePessimistic(dim, M=16, ef_construction=200, nprobe=10)
+    index = nilvec.HybridPessimistic(dim, M=16, ef_construction=200, nprobe=10)
     data = generate_data(5000, dim)
 
     for vec in data:
@@ -131,7 +131,7 @@ def test_hnswivf_remove():
     dim = 32
     # Layer-2+ partitions: P(level>=2) ≈ 1/M^2 = 1/64 for M=8,
     # so 2000 vectors yield ~31 partitions.
-    index = nilvec.HNSWIVFCoarsePessimistic(dim, M=8, ef_construction=100, nprobe=20)
+    index = nilvec.HybridPessimistic(dim, M=8, ef_construction=100, nprobe=20)
     data = generate_data(2000, dim)
 
     for vec in data:
