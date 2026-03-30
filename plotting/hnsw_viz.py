@@ -1,8 +1,9 @@
 import os
-from PIL import Image, ImageDraw, ImageFont
 from dataclasses import dataclass
 from enum import Enum
 from typing import List, Tuple
+
+from PIL import Image, ImageDraw, ImageFont
 
 
 class ConcurrencyMode(Enum):

@@ -1,5 +1,5 @@
-import sys
 import os
+import sys
 
 # Expose the build directory so the compiled C++ extension is importable.
 _builddir = os.path.join(os.path.dirname(__file__), "..", "builddir")

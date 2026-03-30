@@ -1,4 +1,5 @@
 import random
+
 import pytest
 
 nilvec = pytest.importorskip(
@@ -96,7 +97,9 @@ def test_hybrid_optimistic():
     index.set_nprobe(max(10, nparts // 2))
     res = index.search(data[0], 5, ef=50)
     assert len(res.ids) == 5
-    assert 0 in res.ids, "Ground-truth vector not found in HybridOptimistic search results"
+    assert 0 in res.ids, (
+        "Ground-truth vector not found in HybridOptimistic search results"
+    )
 
     # Verify conflict stats are accessible
     stats = index.conflict_stats()

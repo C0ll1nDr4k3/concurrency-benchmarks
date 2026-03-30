@@ -45,11 +45,11 @@ class HybridPessimistic {
 
  public:
   HybridPessimistic(Dim dim,
-                           size_t M = 16,
-                           size_t ef_construction = 200,
-                           float mL = 0.0f,
-                           size_t nprobe = 1,
-                           int max_layers = 16)
+                    size_t M = 16,
+                    size_t ef_construction = 200,
+                    float mL = 0.0f,
+                    size_t nprobe = 1,
+                    int max_layers = 16)
       : dim_(dim),
         M_(M),
         M_max0_(2 * M),
@@ -64,7 +64,8 @@ class HybridPessimistic {
     for (int i = 0; i < max_layers_; ++i) {
       layer_mutexes_.push_back(std::make_unique<std::shared_mutex>());
     }
-    if constexpr (D > 0) assert(dim == static_cast<Dim>(D));
+    if constexpr (D > 0)
+      assert(dim == static_cast<Dim>(D));
   }
 
   NodeId insert(std::span<const T> data) {

@@ -65,7 +65,8 @@ class HybridOptimistic {
     for (int i = 0; i < max_layers_; ++i) {
       layer_states_.push_back(std::make_unique<LayerState>());
     }
-    if constexpr (D > 0) assert(dim == static_cast<Dim>(D));
+    if constexpr (D > 0)
+      assert(dim == static_cast<Dim>(D));
   }
 
   NodeId insert(std::span<const T> data) {
@@ -125,7 +126,8 @@ class HybridOptimistic {
       }
     }
 
-    // Phase 2: Search and connect at upper layers [min(new_level, max_level)..1]
+    // Phase 2: Search and connect at upper layers [min(new_level,
+    // max_level)..1]
     for (int level = std::min(new_level, curr_max_level); level >= 1; --level) {
       NILVEC_TRACK_INSERT_ATTEMPT(conflict_stats_);
 
@@ -135,7 +137,8 @@ class HybridOptimistic {
         if (result.has_value()) {
           // Track nearest partition node from candidates
           for (const auto& c : result->second) {
-            if (node_levels_[c.id] >= 2 && c.distance < nearest_partition_dist) {
+            if (node_levels_[c.id] >= 2 &&
+                c.distance < nearest_partition_dist) {
               nearest_partition_dist = c.distance;
               nearest_partition_node = c.id;
             }
@@ -256,7 +259,8 @@ class HybridOptimistic {
       neighbors_[id][0].clear();
 
       for (size_t pidx : affected) {
-        partition_states_[pidx]->version.fetch_add(1, std::memory_order_release);
+        partition_states_[pidx]->version.fetch_add(1,
+                                                   std::memory_order_release);
       }
     }
 
@@ -487,11 +491,11 @@ class HybridOptimistic {
     return std::make_pair(next, std::move(candidates));
   }
 
-  std::pair<NodeId, std::vector<Candidate>>
-  pessimistic_insert_upper_layer(std::span<const T> data,
-                                 NodeId new_id,
-                                 NodeId entry_point,
-                                 int level) {
+  std::pair<NodeId, std::vector<Candidate>> pessimistic_insert_upper_layer(
+      std::span<const T> data,
+      NodeId new_id,
+      NodeId entry_point,
+      int level) {
     std::unique_lock lock(layer_states_[level]->mutex);
 
     auto candidates = search_layer(data, entry_point, ef_construction_, level);
@@ -520,8 +524,8 @@ class HybridOptimistic {
                           NodeId entry_point,
                           size_t new_partition) {
     // Snapshot partition versions before beam search
-    auto candidates = search_layer_0_optimistic(data, entry_point,
-                                                ef_construction_);
+    auto candidates =
+        search_layer_0_optimistic(data, entry_point, ef_construction_);
     if (!candidates.has_value())
       return false;
 
@@ -541,8 +545,8 @@ class HybridOptimistic {
     std::vector<std::pair<size_t, uint64_t>> version_snapshots;
     version_snapshots.reserve(write_partitions.size());
     for (size_t pidx : write_partitions) {
-      uint64_t v = partition_states_[pidx]->version.load(
-          std::memory_order_acquire);
+      uint64_t v =
+          partition_states_[pidx]->version.load(std::memory_order_acquire);
       version_snapshots.emplace_back(pidx, v);
     }
 
@@ -584,8 +588,8 @@ class HybridOptimistic {
                                   NodeId new_id,
                                   NodeId entry_point,
                                   size_t new_partition) {
-    auto candidates = search_layer_0_pessimistic(data, entry_point,
-                                                 ef_construction_);
+    auto candidates =
+        search_layer_0_pessimistic(data, entry_point, ef_construction_);
     auto neighbors = select_neighbors(candidates, M_max0_);
 
     std::set<size_t> write_partitions;
@@ -623,10 +627,10 @@ class HybridOptimistic {
   // Optimistic beam search at layer 0: reads edge lists under shared partition
   // locks per node, validating partition versions. Returns nullopt if any
   // partition version changed during the search.
-  std::optional<std::vector<Candidate>>
-  search_layer_0_optimistic(std::span<const T> query,
-                            NodeId entry_point,
-                            size_t ef) const {
+  std::optional<std::vector<Candidate>> search_layer_0_optimistic(
+      std::span<const T> query,
+      NodeId entry_point,
+      size_t ef) const {
     std::unordered_set<NodeId> visited;
     MinHeap candidates;
     MaxHeap results;
@@ -651,8 +655,8 @@ class HybridOptimistic {
         size_t pidx = partition_of_[curr_id];
         if (pidx != NO_PARTITION) {
           // Snapshot version before read
-          uint64_t v = partition_states_[pidx]->version.load(
-              std::memory_order_acquire);
+          uint64_t v =
+              partition_states_[pidx]->version.load(std::memory_order_acquire);
           auto it = observed_versions.find(pidx);
           if (it == observed_versions.end()) {
             observed_versions[pidx] = v;
@@ -697,10 +701,9 @@ class HybridOptimistic {
     return result;
   }
 
-  std::vector<Candidate>
-  search_layer_0_pessimistic(std::span<const T> query,
-                             NodeId entry_point,
-                             size_t ef) const {
+  std::vector<Candidate> search_layer_0_pessimistic(std::span<const T> query,
+                                                    NodeId entry_point,
+                                                    size_t ef) const {
     std::unordered_set<NodeId> visited;
     MinHeap candidates;
     MaxHeap results;

@@ -1,6 +1,7 @@
 import os
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.image as mpimg
 from matplotlib.lines import Line2D

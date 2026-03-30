@@ -76,7 +76,8 @@ class HNSWCoarseOptimistic {
     for (int i = 0; i < max_layers_; ++i) {
       layer_states_.push_back(std::make_unique<LayerState>());
     }
-    if constexpr (D > 0) assert(dim == static_cast<Dim>(D));
+    if constexpr (D > 0)
+      assert(dim == static_cast<Dim>(D));
   }
 
   /**
@@ -502,7 +503,8 @@ class HNSWCoarseOptimistic {
     candidates.reserve(neighbor_list.size());
 
     for (NodeId neighbor : neighbor_list) {
-      float dist = squared_distance(node_vec, Traits::make_span(vectors_[neighbor]));
+      float dist =
+          squared_distance(node_vec, Traits::make_span(vectors_[neighbor]));
       candidates.push_back({neighbor, dist});
     }
 

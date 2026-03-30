@@ -3,10 +3,10 @@ Verify that the GIL is released during index operations so that Python
 threads can execute C++ code in parallel across multiple CPU cores.
 """
 
+import multiprocessing
 import random
 import threading
 import time
-import multiprocessing
 
 import pytest
 

@@ -65,7 +65,8 @@ class HNSWCoarsePessimistic {
     for (int i = 0; i < max_layers_; ++i) {
       layer_mutexes_.push_back(std::make_unique<std::shared_mutex>());
     }
-    if constexpr (D > 0) assert(dim == static_cast<Dim>(D));
+    if constexpr (D > 0)
+      assert(dim == static_cast<Dim>(D));
   }
 
   /**
@@ -339,7 +340,8 @@ class HNSWCoarsePessimistic {
     candidates.reserve(neighbor_list.size());
 
     for (NodeId neighbor : neighbor_list) {
-      float dist = squared_distance(node_vec, Traits::make_span(vectors_[neighbor]));
+      float dist =
+          squared_distance(node_vec, Traits::make_span(vectors_[neighbor]));
       candidates.push_back({neighbor, dist});
     }
 

@@ -56,4 +56,6 @@ exclude = ["**/node_modules", "**/__pycache__", "builddir"]
 [dependency-groups]
 dev = [
     "basedpyright>=1.38.2",
+    "pre-commit>=4.3.0",
+    "ruff>=0.13.1",
 ]

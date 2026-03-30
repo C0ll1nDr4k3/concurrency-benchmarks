@@ -1,31 +1,31 @@
 #!/usr/bin/env python3
-import sys
-import os
-import time
-import random
 import argparse
 import json
-import uuid
-import subprocess
-from urllib.parse import urlparse
-import numpy as np
-import threading
-import tempfile
-import shutil
-import h5py
-import requests
+import os
 import pickle
+import random
+import shutil
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import uuid
+from urllib.parse import urlparse
 
-from plotting.style import DPI, format_band_label, get_plot_style_token
+import colorama
+import h5py
+import numpy as np
+import requests
+from colorama import Fore, Style
+
 from plotting.benchmark_plots import (
     plot_conflict_rate,
     plot_recall_vs_qps,
     plot_rw_schedule,
     plot_throughput,
 )
-
-import colorama
-from colorama import Fore, Style
+from plotting.style import DPI, format_band_label, get_plot_style_token
 
 # Initialize colorama early and force colors for better terminal support
 colorama.init(autoreset=True, strip=False)
@@ -831,9 +831,7 @@ class BenchmarkResultsStore:
         # Migration: add latency columns to existing tables that predate them
         for col in ("p50_ms", "p95_ms", "p99_ms"):
             try:
-                self.conn.execute(
-                    f"ALTER TABLE recall_points ADD COLUMN {col} DOUBLE"
-                )
+                self.conn.execute(f"ALTER TABLE recall_points ADD COLUMN {col} DOUBLE")
             except Exception:
                 pass  # Column already exists
         self.conn.execute(

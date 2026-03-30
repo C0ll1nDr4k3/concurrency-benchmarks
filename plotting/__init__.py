@@ -1,3 +1,10 @@
+from .benchmark_plots import (
+    plot_conflict_rate,
+    plot_recall_vs_qps,
+    plot_rw_schedule,
+    plot_throughput,
+)
+from .hnsw_viz import generate_hnsw_viz
 from .style import (
     COLOR_MAPPING,
     DPI,
@@ -11,11 +18,4 @@ from .style import (
     get_plot_style_token,
     load_icons,
 )
-from .benchmark_plots import (
-    plot_conflict_rate,
-    plot_recall_vs_qps,
-    plot_rw_schedule,
-    plot_throughput,
-)
 from .voronoi import generate_concurrency_viz
-from .hnsw_viz import generate_hnsw_viz

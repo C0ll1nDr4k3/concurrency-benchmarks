@@ -42,7 +42,8 @@ class IVFFlatVanilla {
         trained_(false),
         rng_(std::random_device{}()) {
     buckets_.resize(nlist_);
-    if constexpr (D > 0) assert(dim == static_cast<Dim>(D));
+    if constexpr (D > 0)
+      assert(dim == static_cast<Dim>(D));
   }
 
   /**
@@ -131,9 +132,8 @@ class IVFFlatVanilla {
     std::vector<Candidate> centroid_candidates;
     centroid_candidates.reserve(nlist_);
     for (size_t c = 0; c < nlist_; ++c) {
-      float dist = squared_distance(
-          Traits::make_span(query),
-          Traits::make_span(centroids_[c]));
+      float dist = squared_distance(Traits::make_span(query),
+                                    Traits::make_span(centroids_[c]));
       centroid_candidates.push_back({static_cast<NodeId>(c), dist});
     }
     std::partial_sort(centroid_candidates.begin(),
@@ -146,9 +146,8 @@ class IVFFlatVanilla {
     for (size_t i = 0; i < std::min(nprobe_, centroid_candidates.size()); ++i) {
       size_t bucket_idx = centroid_candidates[i].id;
       for (NodeId vec_id : buckets_[bucket_idx]) {
-        float dist =
-            squared_distance(Traits::make_span(query),
-                             Traits::make_span(vectors_[vec_id]));
+        float dist = squared_distance(Traits::make_span(query),
+                                      Traits::make_span(vectors_[vec_id]));
 
         if (results.size() < k || dist < results.top().distance) {
           results.push({vec_id, dist});

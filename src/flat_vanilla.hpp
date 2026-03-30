@@ -32,7 +32,8 @@ class FlatVanilla {
    * @param dim Vector dimensionality
    */
   explicit FlatVanilla(Dim dim) : dim_(dim) {
-    if constexpr (D > 0) assert(dim == static_cast<Dim>(D));
+    if constexpr (D > 0)
+      assert(dim == static_cast<Dim>(D));
   }
 
   /**
@@ -64,7 +65,7 @@ class FlatVanilla {
     MaxHeap results;
     for (size_t i = 0; i < vectors_.size(); ++i) {
       float dist = squared_distance(Traits::make_span(query),
-                                     Traits::make_span(vectors_[i]));
+                                    Traits::make_span(vectors_[i]));
 
       if (results.size() < k || dist < results.top().distance) {
         results.push({static_cast<NodeId>(i), dist});

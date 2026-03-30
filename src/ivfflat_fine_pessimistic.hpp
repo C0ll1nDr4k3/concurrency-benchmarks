@@ -42,7 +42,8 @@ class IVFFlatFinePessimistic {
     buckets_.resize(nlist_);
     bucket_mutexes_ = std::make_unique<std::shared_mutex[]>(
         nlist_);  // NOLINT(modernize-avoid-c-arrays)
-    if constexpr (D > 0) assert(dim == static_cast<Dim>(D));
+    if constexpr (D > 0)
+      assert(dim == static_cast<Dim>(D));
   }
 
   /**
@@ -137,8 +138,8 @@ class IVFFlatFinePessimistic {
     std::vector<Candidate> centroid_candidates;
     centroid_candidates.reserve(nlist_);
     for (size_t c = 0; c < nlist_; ++c) {
-      float dist = squared_distance(
-          Traits::make_span(query), Traits::make_span(centroids_[c]));
+      float dist = squared_distance(Traits::make_span(query),
+                                    Traits::make_span(centroids_[c]));
       centroid_candidates.push_back({static_cast<NodeId>(c), dist});
     }
     std::partial_sort(centroid_candidates.begin(),
@@ -187,7 +188,7 @@ class IVFFlatFinePessimistic {
         Node* node = node_ptrs[j];
         std::shared_lock lock(node->mutex);
         float dist = squared_distance(Traits::make_span(query),
-                                       Traits::make_span(node->vector));
+                                      Traits::make_span(node->vector));
 
         if (results.size() < k || dist < results.top().distance) {
           results.push({bucket_copy[j], dist});

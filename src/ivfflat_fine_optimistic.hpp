@@ -51,7 +51,8 @@ class IVFFlatFineOptimistic {
     for (size_t i = 0; i < nlist_; ++i) {
       bucket_versions_[i].store(0, std::memory_order_relaxed);
     }
-    if constexpr (D > 0) assert(dim == static_cast<Dim>(D));
+    if constexpr (D > 0)
+      assert(dim == static_cast<Dim>(D));
   }
 
   /**
@@ -151,8 +152,8 @@ class IVFFlatFineOptimistic {
     std::vector<Candidate> centroid_candidates;
     centroid_candidates.reserve(nlist_);
     for (size_t c = 0; c < nlist_; ++c) {
-      float dist = squared_distance(
-          Traits::make_span(query), Traits::make_span(centroids_[c]));
+      float dist = squared_distance(Traits::make_span(query),
+                                    Traits::make_span(centroids_[c]));
       centroid_candidates.push_back({static_cast<NodeId>(c), dist});
     }
     std::partial_sort(centroid_candidates.begin(),
@@ -269,7 +270,7 @@ class IVFFlatFineOptimistic {
           continue;
 
         float dist = squared_distance(Traits::make_span(query),
-                                       Traits::make_span(node->vector));
+                                      Traits::make_span(node->vector));
 
         // Verify node version unchanged
         if (node->version.load(std::memory_order_acquire) != node_ver)
@@ -294,7 +295,7 @@ class IVFFlatFineOptimistic {
       Node* node = nodes_[vec_id].get();
 
       float dist = squared_distance(Traits::make_span(query),
-                                     Traits::make_span(node->vector));
+                                    Traits::make_span(node->vector));
 
       if (results.size() < k || dist < results.top().distance) {
         results.push({vec_id, dist});

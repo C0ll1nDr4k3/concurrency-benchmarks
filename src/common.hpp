@@ -46,10 +46,10 @@ template <typename T, int32_t D = DynamicDim>
 struct DimTraits {
   static constexpr bool is_static = (D > 0);
 
-  using SpanType = std::conditional_t<
-      is_static,
-      std::span<const T, static_cast<size_t>(D)>,
-      std::span<const T>>;
+  using SpanType =
+      std::conditional_t<is_static,
+                         std::span<const T, static_cast<size_t>(D)>,
+                         std::span<const T>>;
 
   static SpanType make_span(const std::vector<T>& v) {
     if constexpr (is_static) {
@@ -69,7 +69,8 @@ struct DimTraits {
 };
 
 /**
- * @brief Compute squared Euclidean distance between two vectors (dynamic extent).
+ * @brief Compute squared Euclidean distance between two vectors (dynamic
+ * extent).
  */
 template <typename T>
 inline float squared_distance(std::span<const T> a, std::span<const T> b) {

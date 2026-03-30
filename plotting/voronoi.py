@@ -1,10 +1,11 @@
 import os
-import numpy as np
-from scipy.spatial import Voronoi
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from enum import Enum
 from typing import List, Tuple
-import xml.etree.ElementTree as ET
+
+import numpy as np
+from scipy.spatial import Voronoi
 
 
 class ConcurrencyMode(Enum):

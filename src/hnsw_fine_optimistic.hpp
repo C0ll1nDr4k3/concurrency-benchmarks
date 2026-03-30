@@ -59,7 +59,8 @@ class HNSWFineOptimistic {
         entry_point_(INVALID_NODE),
         max_level_(-1),
         rng_(std::random_device{}()) {
-    if constexpr (D > 0) assert(dim == static_cast<Dim>(D));
+    if constexpr (D > 0)
+      assert(dim == static_cast<Dim>(D));
   }
 
   /**

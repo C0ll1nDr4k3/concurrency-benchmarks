@@ -1,0 +1,13 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.13.1
+    hooks:
+      - id: ruff-check
+        args: ["--select", "I", "--fix"]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v20.1.0
+    hooks:
+      - id: clang-format
+        files: \.(c|cc|cpp|cxx|h|hh|hpp|hxx)$
