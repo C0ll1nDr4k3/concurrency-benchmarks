@@ -35,8 +35,6 @@ full = [
 requires = ["meson-python", "ninja", "pybind11>=2.6"]
 build-backend = "mesonpy"
 
-[tool.meson-python.args]
-setup = ["-Duse_hdf5=true"]
 
 [tool.pytest.ini_options]
 testpaths = ["test"]

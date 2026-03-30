@@ -29,10 +29,7 @@ uv run python main.py [options]
 | `--only-external` | off | Run only external (FAISS/USearch/Milvus/Weaviate) benchmarks |
 | `--results-db PATH` | `benchmark_results.duckdb` | DuckDB file for result history |
 | `--run-tag LABEL` | — | Tag this run in the results DB |
-| `--no-cross-pollinate` | — | Disable merging compatible historical results into plots |
 | `--latency-sample-rate F` | 0.01 | Fraction of queries timed for latency percentiles |
-| `--verify-gil` | off | Run GIL release verification before benchmarks |
-| `--no-auto-start-redis` | — | Disable Docker auto-start for Redis preflight |
 
 Datasets are downloaded automatically from ann-benchmarks.com on first use:
 `sift-128-euclidean`, `glove-25-angular`, `glove-100-angular`, `nytimes-256-angular`, `fashion-mnist-784-euclidean`, `mnist-784-euclidean`, `gist-960-euclidean`.
@@ -50,10 +47,9 @@ Passed to meson via `uv sync` or `meson setup`:
 | Option | Default | Description |
 |--------|---------|-------------|
 | `track_conflicts` | `false` | Instrument optimistic indexes with conflict counters |
-| `use_hdf5` | `true` | HDF5 support for dataset loading |
 | `python_bindings` | `true` | Build Python extension |
 
-To rebuild with a non-default option:
+To rebuild with conflict tracking enabled:
 
 ```sh
 meson setup builddir -Dtrack_conflicts=true --wipe

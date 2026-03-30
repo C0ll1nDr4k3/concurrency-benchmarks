@@ -1641,7 +1641,7 @@ def _run_single_dataset(args, dataset_path):
                 f"{Fore.YELLOW}Skipping Redis benchmark preflight: cannot connect to {redis_info}.{Style.RESET_ALL}\n"
                 f"{Fore.YELLOW}Hint:{Style.RESET_ALL} set REDIS_URL, ensure Docker is running for auto-start, or start Redis Stack manually:\n"
                 "  docker run -p 6379:6379 -d redis/redis-stack:latest\n"
-                "  (use --no-auto-start-redis to disable Docker auto-start)"
+                "  (pass --auto-start-redis=false to disable Docker auto-start)"
             )
 
         multi_band = args._rw_bands is not None and len(args._rw_schedules) > 1
@@ -1841,12 +1841,6 @@ def run_benchmark(args=None):
             help="Merge compatible historical results into current plots (default: enabled)",
         )
         parser.add_argument(
-            "--no-cross-pollinate",
-            action="store_false",
-            dest="cross_pollinate",
-            help="Disable merging compatible historical results",
-        )
-        parser.add_argument(
             "--run-tag",
             type=str,
             default="",
@@ -1859,12 +1853,6 @@ def run_benchmark(args=None):
             help="Attempt to auto-start redis/redis-stack via Docker if REDIS_URL is unreachable (default: enabled)",
         )
         parser.add_argument(
-            "--no-auto-start-redis",
-            action="store_false",
-            dest="auto_start_redis",
-            help="Disable Docker auto-start for Redis benchmark preflight",
-        )
-        parser.add_argument(
             "--preload-ratio",
             type=float,
             default=0.5,
@@ -1875,11 +1863,6 @@ def run_benchmark(args=None):
             type=float,
             default=0.01,
             help="Fraction of queries to time for latency percentiles (0.0-1.0, default: 0.01)",
-        )
-        parser.add_argument(
-            "--verify-gil",
-            action="store_true",
-            help="Run GIL release verification test before benchmarks",
         )
         args = parser.parse_args()
 
