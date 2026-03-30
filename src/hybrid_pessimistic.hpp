@@ -1,5 +1,5 @@
 /**
- * @file hnswivf_coarse_pessimistic.hpp
+ * @file hybrid_pessimistic.hpp
  * @brief Hybrid HNSW-IVF index with per-layer and per-partition pessimistic
  *        concurrency control.
  *
@@ -38,12 +38,13 @@
 
 namespace nilvec {
 
-template <typename T>
-class HNSWIVFCoarsePessimistic {
+template <typename T, int32_t D = DynamicDim>
+class HybridPessimistic {
+  using Traits = DimTraits<T, D>;
   static constexpr size_t NO_PARTITION = std::numeric_limits<size_t>::max();
 
  public:
-  HNSWIVFCoarsePessimistic(Dim dim,
+  HybridPessimistic(Dim dim,
                            size_t M = 16,
                            size_t ef_construction = 200,
                            float mL = 0.0f,
@@ -63,6 +64,7 @@ class HNSWIVFCoarsePessimistic {
     for (int i = 0; i < max_layers_; ++i) {
       layer_mutexes_.push_back(std::make_unique<std::shared_mutex>());
     }
+    if constexpr (D > 0) assert(dim == static_cast<Dim>(D));
   }
 
   NodeId insert(std::span<const T> data) {
@@ -315,8 +317,8 @@ class HNSWIVFCoarsePessimistic {
         for (const auto& [center_id, pidx2] : partition_index_) {
           if (deleted_[center_id])
             continue;
-          float d = squared_distance(std::span<const T>(vectors_[orphan]),
-                                     std::span<const T>(vectors_[center_id]));
+          float d = squared_distance(Traits::make_span(vectors_[orphan]),
+                                     Traits::make_span(vectors_[center_id]));
           if (d < best_dist) {
             best_dist = d;
             best_pidx = pidx2;
@@ -455,8 +457,8 @@ class HNSWIVFCoarsePessimistic {
       float best_dist = std::numeric_limits<float>::max();
 
       for (const auto& [center_id, pidx] : partition_index_) {
-        float d = squared_distance(std::span<const T>(vectors_[nid]),
-                                   std::span<const T>(vectors_[center_id]));
+        float d = squared_distance(Traits::make_span(vectors_[nid]),
+                                   Traits::make_span(vectors_[center_id]));
         if (d < best_dist) {
           best_dist = d;
           best_pidx = pidx;
@@ -696,13 +698,13 @@ class HNSWIVFCoarsePessimistic {
     if (neighbor_list.size() <= max_size)
       return;
 
-    std::span<const T> node_vec(vectors_[node]);
+    auto node_vec = Traits::make_span(vectors_[node]);
     std::vector<Candidate> candidates;
     candidates.reserve(neighbor_list.size());
 
     for (NodeId neighbor : neighbor_list) {
       float dist =
-          squared_distance(node_vec, std::span<const T>(vectors_[neighbor]));
+          squared_distance(node_vec, Traits::make_span(vectors_[neighbor]));
       candidates.push_back({neighbor, dist});
     }
 
@@ -716,7 +718,8 @@ class HNSWIVFCoarsePessimistic {
   }
 
   float compute_distance(std::span<const T> query, NodeId node) const {
-    return squared_distance(query, std::span<const T>(vectors_[node]));
+    return squared_distance(Traits::make_span(query),
+                            Traits::make_span(vectors_[node]));
   }
 
   // Configuration

@@ -32,8 +32,10 @@ namespace nilvec {
  * Each node has a version number. Operations read versions before and after
  * accessing data to detect concurrent modifications.
  */
-template <typename T>
+template <typename T, int32_t D = DynamicDim>
 class HNSWFineOptimistic {
+  using Traits = DimTraits<T, D>;
+
  public:
   /**
    * @brief Construct an HNSW index.
@@ -56,7 +58,9 @@ class HNSWFineOptimistic {
         max_retries_(max_retries),
         entry_point_(INVALID_NODE),
         max_level_(-1),
-        rng_(std::random_device{}()) {}
+        rng_(std::random_device{}()) {
+    if constexpr (D > 0) assert(dim == static_cast<Dim>(D));
+  }
 
   /**
    * @brief Insert a vector into the index.
@@ -444,7 +448,7 @@ class HNSWFineOptimistic {
     if (neighbor_list.size() <= max_size)
       return;
 
-    std::span<const T> node_vec(node_ptr->vector);
+    auto node_vec = Traits::make_span(node_ptr->vector);
     std::vector<Candidate> candidates;
     candidates.reserve(neighbor_list.size());
 
@@ -458,7 +462,7 @@ class HNSWFineOptimistic {
         neighbor_ptr = nodes_[neighbor].get();
       }
       float dist =
-          squared_distance(node_vec, std::span<const T>(neighbor_ptr->vector));
+          squared_distance(node_vec, Traits::make_span(neighbor_ptr->vector));
       candidates.push_back({neighbor, dist});
     }
 
@@ -486,7 +490,8 @@ class HNSWFineOptimistic {
 
     // Vectors are immutable after insertion, so we can read without version
     // check
-    return squared_distance(query, std::span<const T>(node_ptr->vector));
+    return squared_distance(Traits::make_span(query),
+                            Traits::make_span(node_ptr->vector));
   }
 
   int random_level(float mL) {

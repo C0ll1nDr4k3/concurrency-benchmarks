@@ -215,6 +215,9 @@ class FaissHNSW:
     def set_nprobe(self, n):
         pass  # Not applicable
 
+    def set_num_threads(self, n):
+        faiss.omp_set_num_threads(n)
+
     def train(self, data):
         pass  # Not needed
 
@@ -250,6 +253,9 @@ class FaissIVF:
     def set_nprobe(self, n):
         with self._lock:
             self.index.nprobe = n
+
+    def set_num_threads(self, n):
+        faiss.omp_set_num_threads(n)
 
 
 class USearchIndex:
@@ -815,8 +821,51 @@ class BenchmarkResultsStore:
                 recall DOUBLE,
                 qps DOUBLE,
                 line_style VARCHAR,
-                point_order INTEGER
+                point_order INTEGER,
+                p50_ms DOUBLE,
+                p95_ms DOUBLE,
+                p99_ms DOUBLE
             )
+            """
+        )
+        # Migration: add latency columns to existing tables that predate them
+        for col in ("p50_ms", "p95_ms", "p99_ms"):
+            try:
+                self.conn.execute(
+                    f"ALTER TABLE recall_points ADD COLUMN {col} DOUBLE"
+                )
+            except Exception:
+                pass  # Column already exists
+        self.conn.execute(
+            """
+            CREATE VIEW IF NOT EXISTS scaling_efficiency AS
+            WITH base AS (
+                SELECT run_id, index_name,
+                       thread_count AS base_threads,
+                       throughput   AS base_throughput
+                FROM (
+                    SELECT run_id, index_name, thread_count, throughput,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY run_id, index_name
+                               ORDER BY thread_count
+                           ) AS rn
+                    FROM throughput_points
+                ) ranked
+                WHERE rn = 1
+            )
+            SELECT
+                tp.run_id,
+                tp.index_name,
+                tp.thread_count,
+                tp.throughput,
+                b.base_throughput,
+                b.base_threads,
+                tp.throughput / (
+                    b.base_throughput
+                    * (CAST(tp.thread_count AS DOUBLE) / b.base_threads)
+                ) AS efficiency
+            FROM throughput_points tp
+            JOIN base b ON tp.run_id = b.run_id AND tp.index_name = b.index_name
             """
         )
 
@@ -885,10 +934,18 @@ class BenchmarkResultsStore:
                 rows,
             )
 
-    def save_recall_runs(self, run_id, recall_runs):
+    def save_recall_runs(self, run_id, recall_runs, latency_data=None):
+        """
+        recall_runs: list of (index_name, recalls, qps_vals, line_style)
+        latency_data: optional dict of {index_name: [(p50_ms, p95_ms, p99_ms), ...]}
+        """
+        if latency_data is None:
+            latency_data = {}
         rows = []
         for index_name, recalls, qps, line_style in recall_runs:
+            lat = latency_data.get(index_name, [])
             for i, (recall, qps_val) in enumerate(zip(recalls, qps)):
+                p50, p95, p99 = lat[i] if i < len(lat) else (None, None, None)
                 rows.append(
                     (
                         run_id,
@@ -898,14 +955,18 @@ class BenchmarkResultsStore:
                         float(qps_val),
                         line_style,
                         i,
+                        float(p50) if p50 is not None else None,
+                        float(p95) if p95 is not None else None,
+                        float(p99) if p99 is not None else None,
                     )
                 )
         if rows:
             self.conn.executemany(
                 """
                 INSERT INTO recall_points (
-                    run_id, index_name, param_key, recall, qps, line_style, point_order
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    run_id, index_name, param_key, recall, qps, line_style, point_order,
+                    p50_ms, p95_ms, p99_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 rows,
             )
@@ -1046,7 +1107,15 @@ class BenchmarkResultsStore:
 
 
 def benchmark_recall_vs_qps(
-    index_cls, index_name, data, queries, gt, k, index_args=None, search_params=None
+    index_cls,
+    index_name,
+    data,
+    queries,
+    gt,
+    k,
+    index_args=None,
+    search_params=None,
+    latency_sample_rate=1.0,
 ):
     """
     Run Recall vs QPS benchmark.
@@ -1089,25 +1158,44 @@ def benchmark_recall_vs_qps(
         # Search
         start = time.time()
         res_ids_list = []
+        latencies_ms = []
         for q in queries:
+            sample = latency_sample_rate >= 1.0 or random.random() < latency_sample_rate
+            if sample:
+                t0 = time.perf_counter()
             # HNSW search takes 3 args: query, k, ef
             # IVFFlat search takes 2 args: query, k (nprobe set via setter)
             if "ef" in params:
                 res = index.search(q, k, params["ef"])
             else:
                 res = index.search(q, k)
+            if sample:
+                latencies_ms.append((time.perf_counter() - t0) * 1000)
             res_ids_list.append(res.ids)
 
         duration = time.time() - start
         qps = len(queries) / duration
         recall = compute_recall(res_ids_list, gt, k)
 
+        if latencies_ms:
+            p50 = float(np.percentile(latencies_ms, 50))
+            p95 = float(np.percentile(latencies_ms, 95))
+            p99 = float(np.percentile(latencies_ms, 99))
+        else:
+            p50 = p95 = p99 = None
+
         print(
             f"  {Fore.WHITE}Params: {params}{Style.RESET_ALL} -> "
             f"{Fore.BLUE}Recall:{Style.RESET_ALL} {Fore.GREEN}{recall:.4f}{Style.RESET_ALL}, "
             f"{Fore.BLUE}QPS:{Style.RESET_ALL} {Fore.GREEN}{qps:.0f}{Style.RESET_ALL}"
+            + (
+                f", {Fore.BLUE}p50/p95/p99:{Style.RESET_ALL} "
+                f"{Fore.GREEN}{p50:.2f}/{p95:.2f}/{p99:.2f}ms{Style.RESET_ALL}"
+                if p50 is not None
+                else ""
+            )
         )
-        results.append((recall, qps))
+        results.append((recall, qps, p50, p95, p99))
 
     recall_elapsed = time.time() - recall_start_time
     print(
@@ -1170,6 +1258,10 @@ def benchmark_throughput_vs_threads(
             index.train(data)
         else:
             index = index_cls(DIM, *index_args)
+
+        # Match thread budget for external indexes that support it (e.g. FAISS OMP)
+        if hasattr(index, "set_num_threads"):
+            index.set_num_threads(num_threads)
 
         # Pre-load data
         initial_size = int(len(data) * preload_ratio)
@@ -1392,7 +1484,7 @@ def _run_single_dataset(args, dataset_path):
             print(f"{Fore.YELLOW}Results DB disabled: {e}{Style.RESET_ALL}")
 
     results_cache = {
-        "recall_vs_qps": {"runs": [], "K": K, "DIM": DIM},
+        "recall_vs_qps": {"runs": [], "latencies": {}, "K": K, "DIM": DIM},
         "throughput": {},
         "conflicts": {},
         "thread_counts": THREAD_COUNTS,
@@ -1426,10 +1518,14 @@ def _run_single_dataset(args, dataset_path):
             K,
             hnsw_args,
             hnsw_params,
+            latency_sample_rate=args.latency_sample_rate,
         )
-        recalls, qps = zip(*res)
+        recalls, qps_vals, p50s, p95s, p99s = zip(*res)
         results_cache["recall_vs_qps"]["runs"].append(
-            ("HNSW Vanilla", recalls, qps, get_plot_style_token("HNSW Vanilla"))
+            ("HNSW Vanilla", recalls, qps_vals, get_plot_style_token("HNSW Vanilla"))
+        )
+        results_cache["recall_vs_qps"]["latencies"]["HNSW Vanilla"] = list(
+            zip(p50s, p95s, p99s)
         )
 
         # IVFFlat Variants
@@ -1445,15 +1541,19 @@ def _run_single_dataset(args, dataset_path):
             K,
             ivf_args,
             ivf_params,
+            latency_sample_rate=args.latency_sample_rate,
         )
-        recalls, qps = zip(*res)
+        recalls, qps_vals, p50s, p95s, p99s = zip(*res)
         results_cache["recall_vs_qps"]["runs"].append(
             (
                 "IVFFlat Vanilla",
                 recalls,
-                qps,
+                qps_vals,
                 get_plot_style_token("IVFFlat Vanilla"),
             )
+        )
+        results_cache["recall_vs_qps"]["latencies"]["IVFFlat Vanilla"] = list(
+            zip(p50s, p95s, p99s)
         )
 
         # Cross-pollination: inject historical recall runs
@@ -1510,6 +1610,9 @@ def _run_single_dataset(args, dataset_path):
             # IVFFlat
             (nilvec.IVFFlatCoarseOptimistic, "IVF Coarse Opt", ivf_args),
             (nilvec.IVFFlatFineOptimistic, "IVF Fine Opt", ivf_args),
+            # Hybrid
+            (nilvec.HybridPessimistic, "Hybrid Pess", hnsw_args),
+            (nilvec.HybridOptimistic, "Hybrid Opt", hnsw_args),
         ]
 
         # Run benchmarks and collect data
@@ -1660,7 +1763,9 @@ def _run_single_dataset(args, dataset_path):
             )
         if results_cache["recall_vs_qps"]["runs"]:
             results_store.save_recall_runs(
-                run_id, results_cache["recall_vs_qps"]["runs"]
+                run_id,
+                results_cache["recall_vs_qps"]["runs"],
+                results_cache["recall_vs_qps"]["latencies"],
             )
         results_store.close()
 
@@ -1764,6 +1869,12 @@ def run_benchmark(args=None):
             type=float,
             default=0.5,
             help="Fraction of dataset to pre-load during construction (default: 0.5)",
+        )
+        parser.add_argument(
+            "--latency-sample-rate",
+            type=float,
+            default=0.01,
+            help="Fraction of queries to time for latency percentiles (0.0-1.0, default: 0.01)",
         )
         parser.add_argument(
             "--verify-gil",

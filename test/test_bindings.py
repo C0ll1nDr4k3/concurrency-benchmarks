@@ -80,6 +80,49 @@ def test_hnswivf():
     assert 0 in res.ids, "Ground-truth vector not found in HNSWIVF search results"
 
 
+def test_hybrid_optimistic():
+    random.seed(42)
+    dim = 64
+    index = nilvec.HybridOptimistic(dim, M=16, ef_construction=200, nprobe=10)
+    data = generate_data(5000, dim)
+
+    for vec in data:
+        index.insert(vec)
+
+    assert index.size() == 5000
+    nparts = index.num_partitions()
+    assert nparts > 0
+
+    index.set_nprobe(max(10, nparts // 2))
+    res = index.search(data[0], 5, ef=50)
+    assert len(res.ids) == 5
+    assert 0 in res.ids, "Ground-truth vector not found in HybridOptimistic search results"
+
+    # Verify conflict stats are accessible
+    stats = index.conflict_stats()
+    assert stats.insert_attempts >= 0
+
+
+def test_hybrid_optimistic_remove():
+    random.seed(123)
+    dim = 32
+    index = nilvec.HybridOptimistic(dim, M=8, ef_construction=100, nprobe=20)
+    data = generate_data(2000, dim)
+
+    for vec in data:
+        index.insert(vec)
+
+    nparts_before = index.num_partitions()
+    assert nparts_before > 0
+
+    index.remove(1)
+    assert index.size() == 1999
+
+    index.set_nprobe(nparts_before)
+    res = index.search(data[0], 5, ef=50)
+    assert 1 not in res.ids, "Deleted node should not appear in results"
+
+
 def test_hnswivf_remove():
     random.seed(123)
     dim = 32

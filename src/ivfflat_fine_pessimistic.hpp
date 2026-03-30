@@ -25,8 +25,10 @@ namespace nilvec {
 /**
  * @brief IVFFlat index with fine-grained pessimistic locking.
  */
-template <typename T>
+template <typename T, int32_t D = DynamicDim>
 class IVFFlatFinePessimistic {
+  using Traits = DimTraits<T, D>;
+
  public:
   /**
    * @brief Construct an IVFFlat index.
@@ -40,6 +42,7 @@ class IVFFlatFinePessimistic {
     buckets_.resize(nlist_);
     bucket_mutexes_ = std::make_unique<std::shared_mutex[]>(
         nlist_);  // NOLINT(modernize-avoid-c-arrays)
+    if constexpr (D > 0) assert(dim == static_cast<Dim>(D));
   }
 
   /**
@@ -135,7 +138,7 @@ class IVFFlatFinePessimistic {
     centroid_candidates.reserve(nlist_);
     for (size_t c = 0; c < nlist_; ++c) {
       float dist = squared_distance(
-          query, std::span<const float>(centroids_[c].data(), dim_));
+          Traits::make_span(query), Traits::make_span(centroids_[c]));
       centroid_candidates.push_back({static_cast<NodeId>(c), dist});
     }
     std::partial_sort(centroid_candidates.begin(),
@@ -183,7 +186,8 @@ class IVFFlatFinePessimistic {
 
         Node* node = node_ptrs[j];
         std::shared_lock lock(node->mutex);
-        float dist = squared_distance(query, std::span<const T>(node->vector));
+        float dist = squared_distance(Traits::make_span(query),
+                                       Traits::make_span(node->vector));
 
         if (results.size() < k || dist < results.top().distance) {
           results.push({bucket_copy[j], dist});
@@ -248,8 +252,8 @@ class IVFFlatFinePessimistic {
     for (size_t c = 1; c < nlist_; ++c) {
       float total_dist = 0.0f;
       for (size_t i = 0; i < data.size(); ++i) {
-        float d = squared_distance(std::span<const T>(data[i]),
-                                   std::span<const float>(centroids.back()));
+        float d = squared_distance(Traits::make_span(data[i]),
+                                   Traits::make_span(centroids.back()));
         min_distances[i] = std::min(min_distances[i], d);
         total_dist += min_distances[i];
       }
@@ -280,10 +284,11 @@ class IVFFlatFinePessimistic {
     for (size_t c = 0; c < nlist_; ++c) {
       float dist;
       if constexpr (std::is_same_v<VecType, std::vector<T>>) {
-        dist = squared_distance(std::span<const T>(vec),
-                                std::span<const float>(centroids_[c]));
+        dist = squared_distance(Traits::make_span(vec),
+                                Traits::make_span(centroids_[c]));
       } else {
-        dist = squared_distance(vec, std::span<const float>(centroids_[c]));
+        dist = squared_distance(Traits::make_span(vec),
+                                Traits::make_span(centroids_[c]));
       }
 
       if (dist < min_dist) {

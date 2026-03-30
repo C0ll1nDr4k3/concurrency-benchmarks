@@ -32,8 +32,10 @@ namespace nilvec {
  * This allows concurrent searches and more fine-grained locking during
  * insertion.
  */
-template <typename T>
+template <typename T, int32_t D = DynamicDim>
 class HNSWFinePessimistic {
+  using Traits = DimTraits<T, D>;
+
  public:
   /**
    * @brief Construct an HNSW index.
@@ -53,7 +55,9 @@ class HNSWFinePessimistic {
         mL_(mL > 0 ? mL : 1.0f / std::log(static_cast<float>(M))),
         entry_point_(INVALID_NODE),
         max_level_(-1),
-        rng_(std::random_device{}()) {}
+        rng_(std::random_device{}()) {
+    if constexpr (D > 0) assert(dim == static_cast<Dim>(D));
+  }
 
   /**
    * @brief Insert a vector into the index.
@@ -329,14 +333,14 @@ class HNSWFinePessimistic {
     if (neighbor_list.size() <= max_size)
       return;
 
-    std::span<const T> node_vec(nodes_[node]->vector);
+    auto node_vec = Traits::make_span(nodes_[node]->vector);
     std::vector<Candidate> candidates;
     candidates.reserve(neighbor_list.size());
 
     for (NodeId neighbor : neighbor_list) {
       // Vectors are immutable after insertion, safe to read without lock
       float dist = squared_distance(
-          node_vec, std::span<const T>(nodes_[neighbor]->vector));
+          node_vec, Traits::make_span(nodes_[neighbor]->vector));
       candidates.push_back({neighbor, dist});
     }
 
@@ -355,7 +359,8 @@ class HNSWFinePessimistic {
    * Vectors are immutable after insertion, so no lock needed.
    */
   float compute_distance(std::span<const T> query, NodeId node) const {
-    return squared_distance(query, std::span<const T>(nodes_[node]->vector));
+    return squared_distance(Traits::make_span(query),
+                            Traits::make_span(nodes_[node]->vector));
   }
 
   int random_level(float mL) {

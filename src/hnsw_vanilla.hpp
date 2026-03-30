@@ -22,8 +22,10 @@ namespace nilvec {
  *
  * Single-threaded baseline implementation for performance comparison.
  */
-template <typename T>
+template <typename T, int32_t D = DynamicDim>
 class HNSWVanilla {
+  using Traits = DimTraits<T, D>;
+
  public:
   /**
    * @brief Construct an HNSW index.
@@ -43,7 +45,9 @@ class HNSWVanilla {
         mL_(mL > 0 ? mL : 1.0f / std::log(static_cast<float>(M))),
         entry_point_(INVALID_NODE),
         max_level_(-1),
-        rng_(std::random_device{}()) {}
+        rng_(std::random_device{}()) {
+    if constexpr (D > 0) assert(dim == static_cast<Dim>(D));
+  }
 
   /**
    * @brief Insert a vector into the index.
@@ -254,13 +258,12 @@ class HNSWVanilla {
     if (neighbor_list.size() <= max_size)
       return;
 
-    std::span<const T> node_vec(vectors_[node]);
+    auto node_vec = Traits::make_span(vectors_[node]);
     std::vector<Candidate> candidates;
     candidates.reserve(neighbor_list.size());
 
     for (NodeId neighbor : neighbor_list) {
-      float dist =
-          squared_distance(node_vec, std::span<const T>(vectors_[neighbor]));
+      float dist = squared_distance(node_vec, Traits::make_span(vectors_[neighbor]));
       candidates.push_back({neighbor, dist});
     }
 
@@ -274,7 +277,8 @@ class HNSWVanilla {
   }
 
   float compute_distance(std::span<const T> query, NodeId node) const {
-    return squared_distance(query, std::span<const T>(vectors_[node]));
+    return squared_distance(Traits::make_span(query),
+                            Traits::make_span(vectors_[node]));
   }
 
   // Configuration

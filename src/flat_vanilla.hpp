@@ -22,14 +22,18 @@ namespace nilvec {
  *
  * Single-threaded baseline implementation with perfect recall.
  */
-template <typename T>
+template <typename T, int32_t D = DynamicDim>
 class FlatVanilla {
+  using Traits = DimTraits<T, D>;
+
  public:
   /**
    * @brief Construct a flat index.
    * @param dim Vector dimensionality
    */
-  explicit FlatVanilla(Dim dim) : dim_(dim) {}
+  explicit FlatVanilla(Dim dim) : dim_(dim) {
+    if constexpr (D > 0) assert(dim == static_cast<Dim>(D));
+  }
 
   /**
    * @brief Insert a vector into the index.
@@ -59,7 +63,8 @@ class FlatVanilla {
     // Compute distances to all vectors
     MaxHeap results;
     for (size_t i = 0; i < vectors_.size(); ++i) {
-      float dist = squared_distance(query, std::span<const T>(vectors_[i]));
+      float dist = squared_distance(Traits::make_span(query),
+                                     Traits::make_span(vectors_[i]));
 
       if (results.size() < k || dist < results.top().distance) {
         results.push({static_cast<NodeId>(i), dist});

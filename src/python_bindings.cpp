@@ -8,7 +8,8 @@
 #include "hnsw_fine_optimistic.hpp"
 #include "hnsw_fine_pessimistic.hpp"
 #include "hnsw_vanilla.hpp"
-#include "hnswivf_coarse_pessimistic.hpp"
+#include "hybrid_optimistic.hpp"
+#include "hybrid_pessimistic.hpp"
 #include "ivfflat_coarse_optimistic.hpp"
 #include "ivfflat_coarse_pessimistic.hpp"
 #include "ivfflat_fine_optimistic.hpp"
@@ -177,10 +178,10 @@ PYBIND11_MODULE(_nilvec, m) {
   bind_ivfflat(std::type_identity<IVFFlatFinePessimistic<float>>{},
                "IVFFlatFinePessimistic", true);
 
-  // --- HNSWIVF Hybrid Index ---
+  // --- Hybrid Index ---
   {
-    using Index = HNSWIVFCoarsePessimistic<float>;
-    py::class_<Index>(m, "HNSWIVFCoarsePessimistic")
+    using Index = HybridPessimistic<float>;
+    py::class_<Index>(m, "HybridPessimistic")
         .def(py::init<Dim, size_t, size_t, float, size_t>(), py::arg("dim"),
              py::arg("M") = 16, py::arg("ef_construction") = 200,
              py::arg("mL") = 0.0f, py::arg("nprobe") = 1)
@@ -205,5 +206,41 @@ PYBIND11_MODULE(_nilvec, m) {
         .def("max_level", &Index::max_level)
         .def("set_nprobe", &Index::set_nprobe)
         .def("num_partitions", &Index::num_partitions);
+  }
+
+  // --- Hybrid Optimistic Index ---
+  {
+    using Index = HybridOptimistic<float>;
+    py::class_<Index>(m, "HybridOptimistic")
+        .def(py::init<Dim, size_t, size_t, float, size_t>(), py::arg("dim"),
+             py::arg("M") = 16, py::arg("ef_construction") = 200,
+             py::arg("mL") = 0.0f, py::arg("nprobe") = 1)
+        .def(
+            "insert",
+            [](Index& self, const std::vector<float>& data) {
+              return self.insert(std::span<const float>(data));
+            },
+            py::call_guard<py::gil_scoped_release>())
+        .def(
+            "search",
+            [](const Index& self, const std::vector<float>& query, size_t k,
+               size_t ef) {
+              return self.search(std::span<const float>(query), k, ef);
+            },
+            py::arg("query"), py::arg("k"), py::arg("ef") = 0,
+            py::call_guard<py::gil_scoped_release>())
+        .def(
+            "remove", [](Index& self, NodeId id) { self.remove(id); },
+            py::call_guard<py::gil_scoped_release>())
+        .def("size", &Index::size)
+        .def("max_level", &Index::max_level)
+        .def("set_nprobe", &Index::set_nprobe)
+        .def("num_partitions", &Index::num_partitions)
+        .def(
+            "conflict_stats",
+            [](const Index& self) -> const ConflictStats& {
+              return self.conflict_stats();
+            },
+            py::return_value_policy::reference);
   }
 }

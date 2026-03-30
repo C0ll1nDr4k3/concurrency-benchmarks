@@ -24,8 +24,10 @@ namespace nilvec {
  *
  * Single-threaded baseline implementation for performance comparison.
  */
-template <typename T>
+template <typename T, int32_t D = DynamicDim>
 class IVFFlatVanilla {
+  using Traits = DimTraits<T, D>;
+
  public:
   /**
    * @brief Construct an IVFFlat index.
@@ -40,6 +42,7 @@ class IVFFlatVanilla {
         trained_(false),
         rng_(std::random_device{}()) {
     buckets_.resize(nlist_);
+    if constexpr (D > 0) assert(dim == static_cast<Dim>(D));
   }
 
   /**
@@ -129,7 +132,8 @@ class IVFFlatVanilla {
     centroid_candidates.reserve(nlist_);
     for (size_t c = 0; c < nlist_; ++c) {
       float dist = squared_distance(
-          query, std::span<const float>(centroids_[c].data(), dim_));
+          Traits::make_span(query),
+          Traits::make_span(centroids_[c]));
       centroid_candidates.push_back({static_cast<NodeId>(c), dist});
     }
     std::partial_sort(centroid_candidates.begin(),
@@ -143,7 +147,8 @@ class IVFFlatVanilla {
       size_t bucket_idx = centroid_candidates[i].id;
       for (NodeId vec_id : buckets_[bucket_idx]) {
         float dist =
-            squared_distance(query, std::span<const T>(vectors_[vec_id]));
+            squared_distance(Traits::make_span(query),
+                             Traits::make_span(vectors_[vec_id]));
 
         if (results.size() < k || dist < results.top().distance) {
           results.push({vec_id, dist});
@@ -216,8 +221,8 @@ class IVFFlatVanilla {
       // Update minimum distances
       float total_dist = 0.0f;
       for (size_t i = 0; i < data.size(); ++i) {
-        float d = squared_distance(std::span<const T>(data[i]),
-                                   std::span<const float>(centroids.back()));
+        float d = squared_distance(Traits::make_span(data[i]),
+                                   Traits::make_span(centroids.back()));
         min_distances[i] = std::min(min_distances[i], d);
         total_dist += min_distances[i];
       }
@@ -252,10 +257,11 @@ class IVFFlatVanilla {
     for (size_t c = 0; c < nlist_; ++c) {
       float dist;
       if constexpr (std::is_same_v<VecType, std::vector<T>>) {
-        dist = squared_distance(std::span<const T>(vec),
-                                std::span<const float>(centroids_[c]));
+        dist = squared_distance(Traits::make_span(vec),
+                                Traits::make_span(centroids_[c]));
       } else {
-        dist = squared_distance(vec, std::span<const float>(centroids_[c]));
+        dist = squared_distance(Traits::make_span(vec),
+                                Traits::make_span(centroids_[c]));
       }
 
       if (dist < min_dist) {

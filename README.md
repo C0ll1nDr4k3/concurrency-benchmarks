@@ -1,143 +1,61 @@
-# Increasing Throughput with Concurrency Control for ANN Indexes
+# NilVec
 
-## Requirements
+Concurrent ANN index implementations benchmarked against FAISS, USearch, Milvus, and Weaviate.
 
-- **C++ Compiler**: GCC or Clang with C++17 support.
-- **Build System**: Meson and Ninja.
-- **Python**: Python 3.12+
-- **Package Manager**: `uv`.
-- **Libraries**: OpenMP (optional, for some baselines), HDF5 (for reading datasets).
+## Setup
 
-## Building
-
-The project uses Meson for the C++ build and `uv` for the Python environment.
-
-```bash
-# Setup build directory
-meson setup builddir -Duse_hdf5=true
-
-# Compile C++ code and Python bindings
-meson compile -C builddir
+```sh
+uv sync
 ```
 
-> [!WARNING]
-> On Windows, If you encounter `LNK1104: cannot open file 'kernel32.lib'`, first try running the build commands from a "x64 Native Tools Command Prompt for VS 2022" or manually activate the environment:
->
-> ```cmd
-> call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64
-> uv sync
-> ```
->
-> If the error persists, it usually means the Windows SDK is missing or corrupted. To fix this:
->
-> 1. Open **Visual Studio Installer**.
-> 2. Click **Modify** on your VS 2022 installation.
-> 3. Under **Workloads**, ensure **Desktop development with C++** is checked.
-> 4. In the **Installation details** sidebar on the right, ensure a **Windows 10 SDK** or **Windows 11 SDK** version (e.g., `10.0.xxxxx.x`) is checked.
-> 5. Click **Modify** to install the missing components.
+This builds the C++ extension (via meson-python) and installs all Python dependencies.
 
-## Running Benchmarks
+## Running benchmarks
 
-We use `main.py` as the unified entry point for running benchmarks and generating plots.
-
-```bash
-# Run full benchmarks (Throughput and Recall)
-uv run main.py --dataset data/sift-128-euclidean.hdf5
-
-# Run only throughput benchmarks (faster)
-uv run main.py --dataset data/sift-128-euclidean.hdf5 --skip-recall
-
-# Limit the dataset size for quick testing
-uv run main.py --dataset data/sift-128-euclidean.hdf5 --skip-recall --limit 1000
-
-# Persist results into DuckDB (cross-pollination is enabled by default)
-uv run main.py --dataset data/sift-128-euclidean.hdf5 --results-db benchmark_results.duckdb
-
-# Disable cross-pollination for an isolated run
-uv run main.py --dataset data/sift-128-euclidean.hdf5 --results-db benchmark_results.duckdb --no-cross-pollinate
-
-# Optional legacy pickle export
-uv run main.py --dataset data/sift-128-euclidean.hdf5 --save-results benchmark_results.pkl
+```sh
+uv run python main.py [options]
 ```
 
-## Concurrency Model
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--dataset PATH` | `sift-128-euclidean.hdf5` | HDF5 dataset to benchmark |
+| `--all` | off | Run all datasets (overrides `--dataset`) |
+| `--limit N` | 0 (no limit) | Cap vector count |
+| `--preload-ratio F` | 0.5 | Fraction of dataset pre-loaded before concurrent phase |
+| `--rw-ratio F` | — | Fixed write ratio (0.0=read-only, 1.0=write-only) |
+| `--rw-bands LOW-HIGH ...` | `0.01-0.05 0.20-0.50` | Write-ratio bands; each runs a separate sweep |
+| `--skip-recall` | off | Skip recall measurement |
+| `--skip-throughput` | off | Skip throughput measurement |
+| `--only-external` | off | Run only external (FAISS/USearch/Milvus/Weaviate) benchmarks |
+| `--results-db PATH` | `benchmark_results.duckdb` | DuckDB file for result history |
+| `--run-tag LABEL` | — | Tag this run in the results DB |
+| `--no-cross-pollinate` | — | Disable merging compatible historical results into plots |
+| `--latency-sample-rate F` | 0.01 | Fraction of queries timed for latency percentiles |
+| `--verify-gil` | off | Run GIL release verification before benchmarks |
+| `--no-auto-start-redis` | — | Disable Docker auto-start for Redis preflight |
 
-NilVec's Python bindings release the GIL (Global Interpreter Lock) for all performance-critical operations:
+Datasets are downloaded automatically from ann-benchmarks.com on first use:
+`sift-128-euclidean`, `glove-25-angular`, `glove-100-angular`, `nytimes-256-angular`, `fashion-mnist-784-euclidean`, `mnist-784-euclidean`, `gist-960-euclidean`.
 
-- `insert()` - GIL released during vector insertion
-- `search()` - GIL released during k-NN search
-- `train()` - GIL released during k-means training
+## Tests
 
-This enables true multicore parallelism when using Python's `threading` module, allowing multiple threads to execute C++ code simultaneously on different CPU cores.
-
-**Verify GIL release:**
-
-```bash
-uv run pytest test/test_gil_release.py -v
-```
-
-Expected output: ~3-4x speedup with 4 threads, confirming parallel execution.
-
-**Run benchmarks:**
-
-```bash
-uv run python main.py
-```
-
-### Advanced Options
-
-```bash
-# Verify GIL release before running benchmarks
-uv run python main.py --verify-gil
-
-# Control read/write ratio (0.0 = read-only, 1.0 = write-only)
-uv run python main.py --rw-ratio 0.5
-
-# Test all datasets
-uv run python main.py --all
-```
-
-## Latest Benchmarks
-
-Latest committed benchmark figures:
-
-### Throughput Scaling
-
-#### SIFT-128 Euclidean (full)
-
-![Throughput Scaling - SIFT-128 (full)](paper/plots/sift-128-euclidean_full/throughput_scaling.svg)
-
-#### Fashion-MNIST-784 Euclidean (full)
-
-![Throughput Scaling - Fashion-MNIST-784 (full)](paper/plots/fashion-mnist-784-euclidean_full/throughput_scaling.svg)
-
-### Recall vs QPS
-
-![Latest Recall vs QPS](paper/plots/recall_vs_qps.svg)
-Recall vs. QPS.
-
-### Conflict Rate
-
-#### SIFT-128 Euclidean (full)
-
-![Conflict Rate - SIFT-128 (full)](paper/plots/sift-128-euclidean_full/conflict_rate.svg)
-
-#### Fashion-MNIST-784 Euclidean (full)
-
-![Conflict Rate - Fashion-MNIST-784 (full)](paper/plots/fashion-mnist-784-euclidean_full/conflict_rate.svg)
-
-## Testing
-
-```bash
-export PYTHONPATH=$PYTHONPATH:$(pwd)/builddir
+```sh
 uv run pytest
-clang-format -i **/*.cpp **/*.hpp && uv format
 ```
 
-## Paper
+## Build options
 
-typst watch paper/nilvec.typ --open
+Passed to meson via `uv sync` or `meson setup`:
 
-```
+| Option | Default | Description |
+|--------|---------|-------------|
+| `track_conflicts` | `false` | Instrument optimistic indexes with conflict counters |
+| `use_hdf5` | `true` | HDF5 support for dataset loading |
+| `python_bindings` | `true` | Build Python extension |
 
+To rebuild with a non-default option:
+
+```sh
+meson setup builddir -Dtrack_conflicts=true --wipe
+meson compile -C builddir
 ```

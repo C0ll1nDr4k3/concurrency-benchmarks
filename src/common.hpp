@@ -15,6 +15,7 @@
 #include <queue>
 #include <random>
 #include <span>
+#include <type_traits>
 #include <vector>
 
 #if defined(__aarch64__) || defined(_M_ARM64)
@@ -34,11 +35,41 @@ using Dim = std::uint32_t;
 /// Invalid node sentinel
 constexpr NodeId INVALID_NODE = std::numeric_limits<NodeId>::max();
 
+/// Sentinel value indicating runtime dimensionality.
+inline constexpr int32_t DynamicDim = -1;
+
+/// Traits for compile-time vs runtime dimensionality.
+/// When D > 0, SpanType has a fixed extent so the compiler can unroll
+/// distance loops. When D == DynamicDim, SpanType has dynamic extent
+/// (identical to the pre-existing behavior).
+template <typename T, int32_t D = DynamicDim>
+struct DimTraits {
+  static constexpr bool is_static = (D > 0);
+
+  using SpanType = std::conditional_t<
+      is_static,
+      std::span<const T, static_cast<size_t>(D)>,
+      std::span<const T>>;
+
+  static SpanType make_span(const std::vector<T>& v) {
+    if constexpr (is_static) {
+      return SpanType(v.data(), static_cast<size_t>(D));
+    } else {
+      return SpanType(v);
+    }
+  }
+
+  static SpanType make_span(std::span<const T> s) {
+    if constexpr (is_static) {
+      return SpanType(s.data(), static_cast<size_t>(D));
+    } else {
+      return s;
+    }
+  }
+};
+
 /**
- * @brief Compute squared Euclidean distance between two vectors.
- */
-/**
- * @brief Compute squared Euclidean distance between two vectors.
+ * @brief Compute squared Euclidean distance between two vectors (dynamic extent).
  */
 template <typename T>
 inline float squared_distance(std::span<const T> a, std::span<const T> b) {
@@ -80,6 +111,57 @@ inline float squared_distance(std::span<const T> a, std::span<const T> b) {
   }
 
   // Scalar fallback (and generic types)
+  for (; i < n; ++i) {
+    float diff = static_cast<float>(a[i]) - static_cast<float>(b[i]);
+    dist += diff * diff;
+  }
+  return dist;
+}
+
+/**
+ * @brief Compute squared Euclidean distance between two vectors (fixed extent).
+ *
+ * When the span extent is known at compile time, loop bounds become constexpr,
+ * enabling the compiler to fully unroll SIMD and scalar tails.
+ */
+template <typename T, size_t N>
+  requires(N != std::dynamic_extent)
+inline float squared_distance(std::span<const T, N> a,
+                              std::span<const T, N> b) {
+  float dist = 0.0f;
+  constexpr size_t n = N;
+  size_t i = 0;
+
+  if constexpr (std::is_same_v<T, float>) {
+#if defined(__aarch64__) || defined(_M_ARM64)
+    float32x4_t sum_vec = vdupq_n_f32(0.0f);
+    for (; i + 3 < n; i += 4) {
+      float32x4_t a_vec = vld1q_f32(&a[i]);
+      float32x4_t b_vec = vld1q_f32(&b[i]);
+      float32x4_t diff = vsubq_f32(a_vec, b_vec);
+      sum_vec = vmlaq_f32(sum_vec, diff, diff);
+    }
+    dist += vaddvq_f32(sum_vec);
+
+#elif defined(__x86_64__) || defined(_M_X64)
+#ifdef __AVX2__
+    __m256 sum_vec = _mm256_setzero_ps();
+    for (; i + 7 < n; i += 8) {
+      __m256 a_vec = _mm256_loadu_ps(&a[i]);
+      __m256 b_vec = _mm256_loadu_ps(&b[i]);
+      __m256 diff = _mm256_sub_ps(a_vec, b_vec);
+      sum_vec = _mm256_fmadd_ps(diff, diff, sum_vec);
+    }
+    __m128 lo = _mm256_castps256_ps128(sum_vec);
+    __m128 hi = _mm256_extractf128_ps(sum_vec, 1);
+    __m128 sum128 = _mm_add_ps(lo, hi);
+    __m128 hsum = _mm_hadd_ps(sum128, sum128);
+    hsum = _mm_hadd_ps(hsum, hsum);
+    dist += _mm_cvtss_f32(hsum);
+#endif
+#endif
+  }
+
   for (; i < n; ++i) {
     float diff = static_cast<float>(a[i]) - static_cast<float>(b[i]);
     dist += diff * diff;

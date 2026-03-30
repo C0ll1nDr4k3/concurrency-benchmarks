@@ -33,8 +33,10 @@ namespace nilvec {
  * locks on layers as they descend. Insertions acquire exclusive (write) locks
  * on layers they modify.
  */
-template <typename T>
+template <typename T, int32_t D = DynamicDim>
 class HNSWCoarsePessimistic {
+  using Traits = DimTraits<T, D>;
+
  public:
   /**
    * @brief Construct an HNSW index.
@@ -63,6 +65,7 @@ class HNSWCoarsePessimistic {
     for (int i = 0; i < max_layers_; ++i) {
       layer_mutexes_.push_back(std::make_unique<std::shared_mutex>());
     }
+    if constexpr (D > 0) assert(dim == static_cast<Dim>(D));
   }
 
   /**
@@ -331,13 +334,12 @@ class HNSWCoarsePessimistic {
       return;
 
     // Compute distances and sort
-    std::span<const T> node_vec(vectors_[node]);
+    auto node_vec = Traits::make_span(vectors_[node]);
     std::vector<Candidate> candidates;
     candidates.reserve(neighbor_list.size());
 
     for (NodeId neighbor : neighbor_list) {
-      float dist =
-          squared_distance(node_vec, std::span<const T>(vectors_[neighbor]));
+      float dist = squared_distance(node_vec, Traits::make_span(vectors_[neighbor]));
       candidates.push_back({neighbor, dist});
     }
 
@@ -355,7 +357,8 @@ class HNSWCoarsePessimistic {
    * @brief Compute distance from query to a node.
    */
   float compute_distance(std::span<const T> query, NodeId node) const {
-    return squared_distance(query, std::span<const T>(vectors_[node]));
+    return squared_distance(Traits::make_span(query),
+                            Traits::make_span(vectors_[node]));
   }
 
   // Configuration

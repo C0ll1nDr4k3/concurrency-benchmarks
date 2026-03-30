@@ -41,8 +41,10 @@ struct LayerState {
  * Uses version numbers per layer to detect concurrent modifications.
  * Operations that detect a conflict on a layer retry that layer's operation.
  */
-template <typename T>
+template <typename T, int32_t D = DynamicDim>
 class HNSWCoarseOptimistic {
+  using Traits = DimTraits<T, D>;
+
  public:
   /**
    * @brief Construct an HNSW index.
@@ -74,6 +76,7 @@ class HNSWCoarseOptimistic {
     for (int i = 0; i < max_layers_; ++i) {
       layer_states_.push_back(std::make_unique<LayerState>());
     }
+    if constexpr (D > 0) assert(dim == static_cast<Dim>(D));
   }
 
   /**
@@ -494,13 +497,12 @@ class HNSWCoarseOptimistic {
     if (neighbor_list.size() <= max_size)
       return;
 
-    std::span<const T> node_vec(vectors_[node]);
+    auto node_vec = Traits::make_span(vectors_[node]);
     std::vector<Candidate> candidates;
     candidates.reserve(neighbor_list.size());
 
     for (NodeId neighbor : neighbor_list) {
-      float dist =
-          squared_distance(node_vec, std::span<const T>(vectors_[neighbor]));
+      float dist = squared_distance(node_vec, Traits::make_span(vectors_[neighbor]));
       candidates.push_back({neighbor, dist});
     }
 
@@ -514,7 +516,8 @@ class HNSWCoarseOptimistic {
   }
 
   float compute_distance(std::span<const T> query, NodeId node) const {
-    return squared_distance(query, std::span<const T>(vectors_[node]));
+    return squared_distance(Traits::make_span(query),
+                            Traits::make_span(vectors_[node]));
   }
 
   // Configuration
