@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Prepare commit message hook using GitHub CLI
+# If gh is not available or fails, does nothing and lets user write message manually
+
+COMMIT_MSG_FILE=$1
+COMMIT_SOURCE=$2
+
+# Only run for new commits (not amend, merge, etc.)
+if [ -n "$COMMIT_SOURCE" ]; then
+    exit 0
+fi
+
+# Check if there's already a message
+if grep -q '^[^#]' "$COMMIT_MSG_FILE"; then
+    exit 0
+fi
+
+# Check if gh CLI is available
+if ! command -v gh &> /dev/null; then
+    exit 0
+fi
+
+# Get the diff
+DIFF=$(git diff --cached --no-color)
+
+if [ -z "$DIFF" ]; then
+    exit 0
+fi
+
+# Try to generate message with gh copilot
+PROMPT="Generate a concise git commit message for these changes. Use conventional commits format (feat:, fix:, docs:, refactor:, test:, chore:). First line max 72 chars.
+
+${DIFF:0:5000}"
+
+AI_MSG=$(echo "$PROMPT" | gh copilot suggest -t git 2>/dev/null | head -20)
+
+if [ -n "$AI_MSG" ]; then
+    # Prepend AI message to template
+    ORIGINAL=$(cat "$COMMIT_MSG_FILE")
+    echo "$AI_MSG" > "$COMMIT_MSG_FILE"
+    echo "" >> "$COMMIT_MSG_FILE"
+    echo "$ORIGINAL" >> "$COMMIT_MSG_FILE"
+fi
+
+exit 0

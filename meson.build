@@ -57,10 +57,12 @@ if python_bindings and py.found()
             dependencies: dependencies + [pybind11_dep],
             cpp_args: cpp_args,
             install: true,
+            subdir: 'nilvec',
         )
 
         py.install_sources(
-            ['nilvec.py'],
+            ['nilvec/__init__.py'],
+            subdir: 'nilvec',
         )
     else
         warning('pybind11 not found, skipping Python bindings')

@@ -31,13 +31,6 @@ from plotting.style import DPI, format_band_label, get_plot_style_token
 # Initialize colorama early and force colors for better terminal support
 colorama.init(autoreset=True, strip=False)
 
-# Ensure we can find the local package
-sys.path.append(os.getcwd())
-
-# Add build directory to path for the extension
-build_dir = os.path.join(os.getcwd(), "builddir")
-sys.path.append(build_dir)
-
 # Add some initial color to verify it's working
 print(
     f"{Style.BRIGHT}{Fore.GREEN}NilVec Benchmark Suite Initializing...{Style.RESET_ALL}"
@@ -94,11 +87,8 @@ except ImportError:
 try:
     import nilvec
 except ImportError:
-    try:
-        import _nilvec as nilvec
-    except ImportError:
-        print("Error: Could not import nilvec. Run `meson compile -C builddir` first.")
-        sys.exit(1)
+    print("Error: Could not import nilvec. Run `uv pip install -e .` first.")
+    sys.exit(1)
 
 # --- Configuration ---
 DIM = 128
