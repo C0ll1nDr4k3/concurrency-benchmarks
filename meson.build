@@ -9,38 +9,25 @@ project(
     'buildtype=release',
     'b_lto=true',
     'track_conflicts=true',
-    'use_hdf5=true',
   ],
 )
 
 # Build options
 track_conflicts = get_option('track_conflicts')
 python_bindings = get_option('python_bindings')
-use_hdf5 = get_option('use_hdf5')
 
 # Thread support
 thread_dep = dependency('threads')
 
-dependencies = [thread_dep]
+# HDF5 support (required for loading datasets)
+hdf5_dep = dependency('hdf5', language: 'cpp', required: true)
 
-# HDF5 support (optional, for loading standard datasets)
-if use_hdf5
-    hdf5_dep = dependency('hdf5', language: 'cpp', required: false)
-    if hdf5_dep.found()
-        dependencies += hdf5_dep
-    else
-        warning('HDF5 not found. Dataset loading will be limited.')
-        use_hdf5 = false
-    endif
-endif
+dependencies = [thread_dep, hdf5_dep]
 
 # Compile arguments
-cpp_args = []
+cpp_args = ['-DNILVEC_USE_HDF5']
 if track_conflicts
     cpp_args += '-DNILVEC_TRACK_CONFLICTS'
-endif
-if use_hdf5
-    cpp_args += '-DNILVEC_USE_HDF5'
 endif
 
 # Enable architecture-specific optimizations (AVX2, NEON, etc.)
