@@ -23,6 +23,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include "common.hpp"
+#include "hnsw_params.hpp"
 
 namespace nilvec {
 
@@ -61,6 +62,14 @@ class HNSWFineOptimistic {
         rng_(std::random_device{}()) {
     if constexpr (D > 0)
       assert(dim == static_cast<Dim>(D));
+  }
+
+  /// Construct from a shared params struct, with an optional max_retries
+  /// override.
+  explicit HNSWFineOptimistic(const HNSWParams& p, size_t max_retries = 5)
+      : HNSWFineOptimistic(p.dim, p.M, p.ef_construction, p.mL, max_retries) {
+    if (p.max_count > 0)
+      nodes_.reserve(p.max_count);
   }
 
   /**

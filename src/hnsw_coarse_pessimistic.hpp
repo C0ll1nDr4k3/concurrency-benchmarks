@@ -24,6 +24,7 @@
 #include <unordered_set>
 #include <vector>
 #include "common.hpp"
+#include "hnsw_params.hpp"
 
 namespace nilvec {
 
@@ -68,6 +69,16 @@ class HNSWCoarsePessimistic {
     }
     if constexpr (D > 0)
       assert(dim == static_cast<Dim>(D));
+  }
+
+  /// Construct from a shared params struct, with an optional max_layers
+  /// override.
+  explicit HNSWCoarsePessimistic(const HNSWParams& p, int max_layers = 16)
+      : HNSWCoarsePessimistic(p.dim, p.M, p.ef_construction, p.mL, max_layers) {
+    if (p.max_count > 0) {
+      vectors_.reserve(p.max_count);
+      neighbors_.reserve(p.max_count);
+    }
   }
 
   /**

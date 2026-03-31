@@ -20,6 +20,7 @@
 #include <shared_mutex>
 #include <vector>
 #include "common.hpp"
+#include "ivf_params.hpp"
 
 namespace nilvec {
 
@@ -55,6 +56,14 @@ class IVFFlatCoarseOptimistic {
     }
     if constexpr (D > 0)
       assert(dim == static_cast<Dim>(D));
+  }
+
+  /// Construct from a shared params struct, with an optional max_retries
+  /// override.
+  explicit IVFFlatCoarseOptimistic(const IVFParams& p, size_t max_retries = 10)
+      : IVFFlatCoarseOptimistic(p.dim, p.nlist, p.nprobe, max_retries) {
+    if (p.max_count > 0)
+      vectors_.reserve(p.max_count);
   }
 
   /**

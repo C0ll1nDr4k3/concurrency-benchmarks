@@ -17,6 +17,7 @@
 #include <shared_mutex>
 #include <vector>
 #include "common.hpp"
+#include "ivf_params.hpp"
 
 namespace nilvec {
 
@@ -45,6 +46,13 @@ class IVFFlatCoarsePessimistic {
         nlist_);  // NOLINT(modernize-avoid-c-arrays)
     if constexpr (D > 0)
       assert(dim == static_cast<Dim>(D));
+  }
+
+  /// Construct from a shared params struct.
+  explicit IVFFlatCoarsePessimistic(const IVFParams& p)
+      : IVFFlatCoarsePessimistic(p.dim, p.nlist, p.nprobe) {
+    if (p.max_count > 0)
+      vectors_.reserve(p.max_count);
   }
 
   /**

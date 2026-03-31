@@ -16,6 +16,7 @@
 #include <numeric>
 #include <vector>
 #include "common.hpp"
+#include "ivf_params.hpp"
 
 namespace nilvec {
 
@@ -44,6 +45,13 @@ class IVFFlatVanilla {
     buckets_.resize(nlist_);
     if constexpr (D > 0)
       assert(dim == static_cast<Dim>(D));
+  }
+
+  /// Construct from a shared params struct.
+  explicit IVFFlatVanilla(const IVFParams& p)
+      : IVFFlatVanilla(p.dim, p.nlist, p.nprobe) {
+    if (p.max_count > 0)
+      vectors_.reserve(p.max_count);
   }
 
   /**
