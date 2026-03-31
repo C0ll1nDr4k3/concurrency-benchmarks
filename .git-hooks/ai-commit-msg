@@ -33,18 +33,18 @@ if [ -z "$DIFF" ]; then
 fi
 
 # Try to generate message with copilot
-PROMPT="Generate a concise git commit message for these changes. Use conventional commits format (feat:, fix:, docs:, refactor:, test:, chore:). First line max 72 chars. Be specific.
+PROMPT="Generate a concise git commit message for these changes. Use conventional commits format (feat:, fix:, docs:, refactor:, test:, chore:). First line max 72 chars (summary). For commits with disperate changes, add a blank line and detailed body. Be specific.
 
 Changes:
 $DIFF"
 
 # Use copilot in non-interactive mode with prompt
-AI_MSG=$(echo "$PROMPT" | $COPILOT_CMD --allow-all-tools -p "Generate a git commit message" 2>/dev/null || echo "")
+AI_MSG=$($COPILOT_CMD --allow-all-tools --model claude-haiku-4.5 -p "$PROMPT" 2>&1 || echo "")
 
 if [ -n "$AI_MSG" ]; then
     # Clean up any markdown code fences or extra text
     AI_MSG=$(echo "$AI_MSG" | sed -n '/^[a-z]*:/,/^$/p' | head -10)
-    
+
     if [ -n "$AI_MSG" ]; then
         # Prepend AI message to template
         ORIGINAL=$(cat "$COMMIT_MSG_FILE")

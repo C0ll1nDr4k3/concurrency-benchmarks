@@ -1490,60 +1490,53 @@ def _run_single_dataset(args, dataset_path):
     nlist = int(NUM_VECTORS**0.5)
     ivf_args = [nlist, sqrt(nlist)]
 
-    # --- Recall vs QPS ---
+    # --- ANN Benchmark ---
     if not args.skip_recall:
-        print("\n=== Recall vs QPS Benchmark ===")
+        print("\n=== ANN Benchmark ===")
 
-        # HNSW Variants
-        ef_values = [2**n for n in range(1, 4)]
+        # HNSW family: sweep ef
+        ef_values = [2**n for n in range(1, 9)]  # 2, 4, 8, 16, 32, 64, 128, 256
         hnsw_params = [{"ef": ef} for ef in ef_values]
 
-        res = benchmark_recall_vs_qps(
-            nilvec.HNSWVanilla,
-            "HNSW Vanilla",
-            data,
-            queries,
-            gt,
-            K,
-            hnsw_args,
-            hnsw_params,
-            latency_sample_rate=args.latency_sample_rate,
-        )
-        recalls, qps_vals, p50s, p95s, p99s = zip(*res)
-        results_cache["recall_vs_qps"]["runs"].append(
-            ("HNSW Vanilla", recalls, qps_vals, get_plot_style_token("HNSW Vanilla"))
-        )
-        results_cache["recall_vs_qps"]["latencies"]["HNSW Vanilla"] = list(
-            zip(p50s, p95s, p99s)
-        )
-
-        # IVFFlat Variants
-        nprobe_values = [1, 2, 4, 8, 16, 32]
+        # IVFFlat family: sweep nprobe
+        nprobe_values = [1, 2, 4, 8, 16, 32, 64, 128]
         ivf_params = [{"nprobe": np} for np in nprobe_values if np < nlist]
 
-        res = benchmark_recall_vs_qps(
-            nilvec.IVFFlatVanilla,
-            "IVFFlat Vanilla",
-            data,
-            queries,
-            gt,
-            K,
-            ivf_args,
-            ivf_params,
-            latency_sample_rate=args.latency_sample_rate,
-        )
-        recalls, qps_vals, p50s, p95s, p99s = zip(*res)
-        results_cache["recall_vs_qps"]["runs"].append(
-            (
-                "IVFFlat Vanilla",
-                recalls,
-                qps_vals,
-                get_plot_style_token("IVFFlat Vanilla"),
+        ann_indexes = [
+            # HNSW family
+            (nilvec.HNSWVanilla, "HNSW Vanilla", hnsw_args, hnsw_params),
+            (nilvec.HNSWCoarseOptimistic, "HNSW Coarse Opt", hnsw_args, hnsw_params),
+            (nilvec.HNSWCoarsePessimistic, "HNSW Coarse Pess", hnsw_args, hnsw_params),
+            (nilvec.HNSWFineOptimistic, "HNSW Fine Opt", hnsw_args, hnsw_params),
+            (nilvec.HNSWFinePessimistic, "HNSW Fine Pess", hnsw_args, hnsw_params),
+            # IVFFlat family
+            (nilvec.IVFFlatVanilla, "IVFFlat Vanilla", ivf_args, ivf_params),
+            (nilvec.IVFFlatCoarseOptimistic, "IVF Coarse Opt", ivf_args, ivf_params),
+            (nilvec.IVFFlatFineOptimistic, "IVF Fine Opt", ivf_args, ivf_params),
+            # Hybrid family
+            (nilvec.HybridOptimistic, "Hybrid Opt", hnsw_args, hnsw_params),
+            (nilvec.HybridPessimistic, "Hybrid Pess", hnsw_args, hnsw_params),
+        ]
+
+        for index_cls, index_name, idx_args, search_params in ann_indexes:
+            res = benchmark_recall_vs_qps(
+                index_cls,
+                index_name,
+                data,
+                queries,
+                gt,
+                K,
+                idx_args,
+                search_params,
+                latency_sample_rate=args.latency_sample_rate,
             )
-        )
-        results_cache["recall_vs_qps"]["latencies"]["IVFFlat Vanilla"] = list(
-            zip(p50s, p95s, p99s)
-        )
+            recalls, qps_vals, p50s, p95s, p99s = zip(*res)
+            results_cache["recall_vs_qps"]["runs"].append(
+                (index_name, recalls, qps_vals, get_plot_style_token(index_name))
+            )
+            results_cache["recall_vs_qps"]["latencies"][index_name] = list(
+                zip(p50s, p95s, p99s)
+            )
 
         # Cross-pollination: inject historical recall runs
         current_names = {n for n, _, _, _ in results_cache["recall_vs_qps"]["runs"]}
@@ -1774,7 +1767,9 @@ def _run_single_dataset(args, dataset_path):
 def run_benchmark(args=None):
     if args is None:
         parser = argparse.ArgumentParser()
-        parser.add_argument("--skip-recall", action="store_true")
+        parser.add_argument(
+            "--skip-ann", "--skip-recall", dest="skip_recall", action="store_true"
+        )
         parser.add_argument("--skip-throughput", action="store_true")
         parser.add_argument(
             "--dataset",
