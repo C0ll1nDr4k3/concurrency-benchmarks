@@ -49,24 +49,11 @@ uv run pre-commit run --all-files
 ```
 
 Pre-commit hooks run automatically on `git commit` and include:
+
 - `ruff` (Python formatting and import sorting)
 - `clang-format` (C++ formatting)
 - `pytest` (runs all tests)
 - AI commit message generator (optional, requires `gh` CLI)
-
-## AI-Generated Commit Messages
-
-The repository includes a simple git hook that uses GitHub CLI to generate commit messages. When you run `git commit` (without `-m`), it uses `gh copilot suggest` to prepopulate the editor with a conventional commits message.
-
-Requires: `gh` CLI with Copilot access. If not available, gracefully does nothing.
-
-See [`.git-hooks/README.md`](.git-hooks/README.md) for details.
-
-Install the commit hook once per clone:
-
-```sh
-uv run pre-commit install
-```
 
 ## Build options
 
