@@ -3,7 +3,7 @@
  * @brief Dataset loading utilities for ANN benchmarks.
  *
  * Supports loading standard ANN benchmark datasets in HDF5 format
- * from ann-benchmarks.com.
+ * from ann-benchmarks.com. Requires libhdf5 (H5Cpp.h).
  */
 
 #pragma once
@@ -19,12 +19,9 @@
 #include <string>
 #include <vector>
 
-#include "common.hpp"
-
-// HDF5 is optional - if not available, only fvecs format is supported
-#ifdef NILVEC_USE_HDF5
 #include <H5Cpp.h>
-#endif
+
+#include "common.hpp"
 
 namespace nilvec {
 
@@ -97,7 +94,6 @@ inline bool download_file(const std::string& url, const std::string& filepath) {
   return true;
 }
 
-#ifdef NILVEC_USE_HDF5
 /**
  * @brief Load a dataset from HDF5 format (ann-benchmarks format).
  */
@@ -227,7 +223,6 @@ Dataset<T> load_hdf5(const std::string& filepath,
 
   return dataset;
 }
-#endif  // NILVEC_USE_HDF5
 
 /**
  * @brief Load vectors from fvecs format (used by FAISS/Texmex).
@@ -378,20 +373,12 @@ Dataset<T> load_dataset(const std::string& name,
     }
   }
 
-#ifdef NILVEC_USE_HDF5
   std::cout << "Loading dataset: " << name << std::endl;
   auto dataset = load_hdf5<T>(filepath, max_train, max_test);
   std::cout << "Loaded " << dataset.train_size() << " train vectors, "
             << dataset.test_size() << " test queries, " << dataset.dimension
             << " dimensions" << std::endl;
   return dataset;
-#else
-  throw std::runtime_error(
-      "HDF5 support not enabled. Rebuild with -DNILVEC_USE_HDF5=ON and link "
-      "against libhdf5.\n"
-      "On macOS: brew install hdf5\n"
-      "On Ubuntu: apt-get install libhdf5-dev");
-#endif
 }
 
 /**

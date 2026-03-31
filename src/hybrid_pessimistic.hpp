@@ -3,23 +3,21 @@
  * @brief Hybrid HNSW-IVF index with per-layer and per-partition pessimistic
  *        concurrency control.
  *
- * Upper layers (>= 1) form a standard HNSW graph protected by per-layer
- * shared_mutex locks. Layer-0 edges are built identically to a standard HNSW
- * graph, but locking is per-partition rather than per-layer: each layer-2+
- * node defines a partition, and the partition's lock protects the layer-0
- * edge lists of all nodes assigned to it.
+ * Upper layers (>= 1) form a standard HNSW graph protected by per-node
+ * shared_mutex locks. Each node's edge lists at layers >= 1 are protected by
+ * that node's entry in node_mutexes_. Readers hold shared locks; writers
+ * acquire exclusive locks on the full write set (new node + selected neighbors)
+ * in sorted NodeId order -- the same deadlock-free protocol used for layer-0
+ * partitions.
  *
- * Search descends the upper-layer graph to find nprobe nearest partition
- * centers, then walks layer-0 edges starting from each center. The walk
- * crosses partition boundaries freely -- shared locks are acquired on each
- * partition as nodes within it are encountered. Since shared locks never
- * conflict, readers never block each other. Writers acquire exclusive
- * partition locks, so concurrent inserts into disjoint partitions proceed
- * without contention.
+ * Layer-0 edges use IVF-style partitioning: each layer-2+ node defines a
+ * partition whose lock protects the layer-0 edge lists of all nodes assigned
+ * to it. Per-node upper-layer locking and per-partition layer-0 locking are
+ * independent; neither subsumes the other.
  *
  * No train() step is needed -- partitions emerge from HNSW level generation.
  *
- * Lock order: global -> layer[high..low] -> partition_registry ->
+ * Lock order: global -> node[low_id..high_id] -> partition_registry ->
  *             partition[low_idx..high_idx]
  */
 
@@ -48,22 +46,16 @@ class HybridPessimistic {
                     size_t M = 16,
                     size_t ef_construction = 200,
                     float mL = 0.0f,
-                    size_t nprobe = 1,
-                    int max_layers = 16)
+                    size_t nprobe = 1)
       : dim_(dim),
         M_(M),
         M_max0_(2 * M),
         ef_construction_(ef_construction),
         mL_(mL > 0 ? mL : 1.0f / std::log(static_cast<float>(M))),
         nprobe_(nprobe),
-        max_layers_(max_layers),
         entry_point_(INVALID_NODE),
         max_level_(-1),
         rng_(std::random_device{}()) {
-    layer_mutexes_.reserve(max_layers_);
-    for (int i = 0; i < max_layers_; ++i) {
-      layer_mutexes_.push_back(std::make_unique<std::shared_mutex>());
-    }
     if constexpr (D > 0)
       assert(dim == static_cast<Dim>(D));
   }
@@ -84,6 +76,7 @@ class HybridPessimistic {
       node_levels_.push_back(new_level);
       partition_of_.push_back(NO_PARTITION);
       deleted_.push_back(false);
+      node_mutexes_.push_back(std::make_unique<std::shared_mutex>());
     }
 
     // First insertion
@@ -115,7 +108,6 @@ class HybridPessimistic {
 
     // Phase 1: Greedy descent through upper layers above new_level
     for (int level = curr_max_level; level > new_level; --level) {
-      std::shared_lock layer_lock(*layer_mutexes_[level]);
       curr_entry = greedy_search_layer(data, curr_entry, level);
 
       if (level >= 2 && node_levels_[curr_entry] >= 2) {
@@ -130,12 +122,22 @@ class HybridPessimistic {
     // Phase 2: Search and connect at upper layers [min(new_level,
     // max_level)..1]
     for (int level = std::min(new_level, curr_max_level); level >= 1; --level) {
-      std::unique_lock layer_lock(*layer_mutexes_[level]);
-
       auto candidates = search_layer(data, curr_entry, ef_construction_, level);
 
       size_t M_layer = M_;
       auto neighbors = select_neighbors(candidates, M_layer);
+
+      // Acquire per-node exclusive locks on new_id + selected neighbors in
+      // sorted NodeId order (deadlock-free, mirrors layer-0 partition
+      // protocol).
+      std::set<NodeId> write_set;
+      write_set.insert(new_id);
+      for (NodeId n : neighbors)
+        write_set.insert(n);
+      std::vector<std::unique_lock<std::shared_mutex>> node_locks;
+      node_locks.reserve(write_set.size());
+      for (NodeId n : write_set)
+        node_locks.emplace_back(*node_mutexes_[n]);
 
       neighbors_[new_id][level] = neighbors;
 
@@ -254,8 +256,30 @@ class HybridPessimistic {
 
     // Remove from upper-layer graph edges (layers >= 1)
     for (int l = level; l >= 1; --l) {
-      std::unique_lock layer_lock(*layer_mutexes_[l]);
+      // Phase 1: read id's neighbors under a shared lock so the snapshot is
+      // race-free.  We release before the exclusive phase to avoid upgrading.
+      std::vector<NodeId> id_neighbors;
+      {
+        std::shared_lock slk(*node_mutexes_[id]);
+        id_neighbors = neighbors_[id][l];
+      }
+
+      // Phase 2: acquire exclusive locks on id + snapshot neighbors in sorted
+      // order.  Concurrent inserts that add id as a neighbor after the snapshot
+      // will have a dangling edge, but tombstones filter deleted nodes during
+      // search so correctness is preserved.
+      std::set<NodeId> write_set;
+      write_set.insert(id);
+      for (NodeId n : id_neighbors)
+        write_set.insert(n);
+      std::vector<std::unique_lock<std::shared_mutex>> node_locks;
+      node_locks.reserve(write_set.size());
+      for (NodeId n : write_set)
+        node_locks.emplace_back(*node_mutexes_[n]);
+
       for (NodeId neighbor : neighbors_[id][l]) {
+        if (!write_set.count(neighbor))
+          continue;  // concurrent add after snapshot; tombstone handles it
         auto& nlist = neighbors_[neighbor][l];
         nlist.erase(std::remove(nlist.begin(), nlist.end(), id), nlist.end());
       }
@@ -351,7 +375,6 @@ class HybridPessimistic {
 
     // Phase 1: Greedy descent through upper layers to layer 2
     for (int level = curr_max_level; level >= 3; --level) {
-      std::shared_lock layer_lock(*layer_mutexes_[level]);
       curr_entry = greedy_search_layer(query, curr_entry, level);
     }
 
@@ -359,7 +382,6 @@ class HybridPessimistic {
     std::vector<NodeId> probe_centers;
 
     if (curr_max_level >= 2) {
-      std::shared_lock layer_lock(*layer_mutexes_[2]);
       size_t np = nprobe_.load(std::memory_order_relaxed);
       size_t search_ef = std::max(np, ef);
       auto candidates = search_layer(query, curr_entry, search_ef, 2);
@@ -619,7 +641,12 @@ class HybridPessimistic {
     bool improved = true;
     while (improved) {
       improved = false;
-      for (NodeId neighbor : neighbors_[current][level]) {
+      std::vector<NodeId> curr_neighbors;
+      {
+        std::shared_lock nlk(*node_mutexes_[current]);
+        curr_neighbors = neighbors_[current][level];
+      }
+      for (NodeId neighbor : curr_neighbors) {
         if (deleted_[neighbor])
           continue;
         float neighbor_dist = compute_distance(query, neighbor);
@@ -654,7 +681,12 @@ class HybridPessimistic {
       if (curr_dist > results.top().distance)
         break;
 
-      for (NodeId neighbor : neighbors_[curr_id][level]) {
+      std::vector<NodeId> curr_neighbors;
+      {
+        std::shared_lock nlk(*node_mutexes_[curr_id]);
+        curr_neighbors = neighbors_[curr_id][level];
+      }
+      for (NodeId neighbor : curr_neighbors) {
         if (visited.count(neighbor) > 0)
           continue;
         visited.insert(neighbor);
@@ -730,7 +762,6 @@ class HybridPessimistic {
   size_t ef_construction_;
   float mL_;
   std::atomic<size_t> nprobe_;
-  int max_layers_;
 
   // Graph structure
   std::atomic<NodeId> entry_point_;
@@ -753,7 +784,7 @@ class HybridPessimistic {
 
   // Concurrency control
   mutable std::shared_mutex global_mutex_;
-  mutable std::vector<std::unique_ptr<std::shared_mutex>> layer_mutexes_;
+  mutable std::vector<std::unique_ptr<std::shared_mutex>> node_mutexes_;
   mutable std::vector<std::unique_ptr<std::shared_mutex>> partition_mutexes_;
   mutable std::shared_mutex partition_registry_mutex_;
 

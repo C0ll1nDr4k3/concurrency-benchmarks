@@ -9,11 +9,12 @@
  * version numbers before reading, then validate after. Writers atomically
  * increment versions; readers that observe a version change retry.
  *
- * Upper layers use per-layer version numbers. Layer-0 uses per-partition
- * version numbers. On retry exhaustion, both fall back to pessimistic locking.
+ * Upper layers use per-node version numbers (one PartitionState per node).
+ * Layer-0 uses per-partition version numbers. On retry exhaustion, both fall
+ * back to pessimistic locking with per-node or per-partition mutexes.
  *
  * Lock order (pessimistic fallback):
- *   global -> layer[high..low] -> partition_registry ->
+ *   global -> node[low_id..high_id] -> partition_registry ->
  *   partition[low_idx..high_idx]
  */
 
@@ -48,8 +49,7 @@ class HybridOptimistic {
                    size_t ef_construction = 200,
                    float mL = 0.0f,
                    size_t nprobe = 1,
-                   size_t max_retries = 10,
-                   int max_layers = 16)
+                   size_t max_retries = 10)
       : dim_(dim),
         M_(M),
         M_max0_(2 * M),
@@ -57,14 +57,9 @@ class HybridOptimistic {
         mL_(mL > 0 ? mL : 1.0f / std::log(static_cast<float>(M))),
         nprobe_(nprobe),
         max_retries_(max_retries),
-        max_layers_(max_layers),
         entry_point_(INVALID_NODE),
         max_level_(-1),
         rng_(std::random_device{}()) {
-    layer_states_.reserve(max_layers_);
-    for (int i = 0; i < max_layers_; ++i) {
-      layer_states_.push_back(std::make_unique<LayerState>());
-    }
     if constexpr (D > 0)
       assert(dim == static_cast<Dim>(D));
   }
@@ -85,6 +80,7 @@ class HybridOptimistic {
       node_levels_.push_back(new_level);
       partition_of_.push_back(NO_PARTITION);
       deleted_.push_back(false);
+      node_upper_states_.push_back(std::make_unique<PartitionState>());
     }
 
     // First insertion
@@ -225,13 +221,33 @@ class HybridOptimistic {
 
     // Remove from upper-layer graph edges (layers >= 1)
     for (int l = level; l >= 1; --l) {
-      std::unique_lock layer_lock(layer_states_[l]->mutex);
+      // Phase 1: snapshot id's neighbors under a shared lock.
+      std::vector<NodeId> id_neighbors;
+      {
+        std::shared_lock slk(node_upper_states_[id]->mutex);
+        id_neighbors = neighbors_[id][l];
+      }
+
+      // Phase 2: exclusive locks on id + snapshot neighbors in sorted order.
+      std::set<NodeId> write_set;
+      write_set.insert(id);
+      for (NodeId n : id_neighbors)
+        write_set.insert(n);
+      std::vector<std::unique_lock<std::shared_mutex>> node_locks;
+      node_locks.reserve(write_set.size());
+      for (NodeId n : write_set)
+        node_locks.emplace_back(node_upper_states_[n]->mutex);
+
       for (NodeId neighbor : neighbors_[id][l]) {
+        if (!write_set.count(neighbor))
+          continue;
         auto& nlist = neighbors_[neighbor][l];
         nlist.erase(std::remove(nlist.begin(), nlist.end(), id), nlist.end());
       }
       neighbors_[id][l].clear();
-      layer_states_[l]->version.fetch_add(1, std::memory_order_release);
+
+      for (NodeId n : write_set)
+        node_upper_states_[n]->version.fetch_add(1, std::memory_order_release);
     }
 
     // Remove layer-0 edges under partition locks
@@ -334,50 +350,16 @@ class HybridOptimistic {
       size_t np = nprobe_.load(std::memory_order_relaxed);
       size_t search_ef = std::max(np, ef);
 
-      // Optimistic beam search at layer 2 with retry
-      NILVEC_TRACK_SEARCH_ATTEMPT(conflict_stats_);
-      bool found = false;
-      for (size_t retry = 0; retry <= max_retries_ && !found; ++retry) {
-        uint64_t start_version =
-            layer_states_[2]->version.load(std::memory_order_acquire);
+      auto candidates = search_layer(query, curr_entry, search_ef, 2);
 
-        std::vector<Candidate> candidates;
-        {
-          std::shared_lock layer_lock(layer_states_[2]->mutex);
-          candidates = search_layer(query, curr_entry, search_ef, 2);
-        }
-
-        if (layer_states_[2]->version.load(std::memory_order_acquire) ==
-            start_version) {
-          std::shared_lock reg_lock(partition_registry_mutex_);
-          for (const auto& c : candidates) {
-            if (probe_centers.size() >= np)
-              break;
-            if (deleted_[c.id])
-              continue;
-            if (partition_index_.count(c.id)) {
-              probe_centers.push_back(c.id);
-            }
-          }
-          found = true;
-        } else {
-          NILVEC_TRACK_SEARCH_CONFLICT(conflict_stats_);
-        }
-      }
-
-      if (!found) {
-        // Pessimistic fallback
-        std::shared_lock layer_lock(layer_states_[2]->mutex);
-        auto candidates = search_layer(query, curr_entry, search_ef, 2);
-        std::shared_lock reg_lock(partition_registry_mutex_);
-        for (const auto& c : candidates) {
-          if (probe_centers.size() >= np)
-            break;
-          if (deleted_[c.id])
-            continue;
-          if (partition_index_.count(c.id)) {
-            probe_centers.push_back(c.id);
-          }
+      std::shared_lock reg_lock(partition_registry_mutex_);
+      for (const auto& c : candidates) {
+        if (probe_centers.size() >= np)
+          break;
+        if (deleted_[c.id])
+          continue;
+        if (partition_index_.count(c.id)) {
+          probe_centers.push_back(c.id);
         }
       }
     } else {
@@ -447,32 +429,42 @@ class HybridOptimistic {
   // --- Upper-layer optimistic insert ---
 
   // Returns (next_entry, candidates) on success, nullopt on conflict.
+  // Searches under per-node shared locks, snapshots write-set versions, then
+  // acquires exclusive locks and validates before committing.
   std::optional<std::pair<NodeId, std::vector<Candidate>>>
   try_insert_upper_layer(std::span<const T> data,
                          NodeId new_id,
                          NodeId entry_point,
                          int level) {
-    uint64_t start_version =
-        layer_states_[level]->version.load(std::memory_order_acquire);
-
-    std::vector<Candidate> candidates;
-    {
-      std::shared_lock lock(layer_states_[level]->mutex);
-      candidates = search_layer(data, entry_point, ef_construction_, level);
-    }
-
-    if (layer_states_[level]->version.load(std::memory_order_acquire) !=
-        start_version) {
-      return std::nullopt;
-    }
-
+    auto candidates = search_layer(data, entry_point, ef_construction_, level);
     auto neighbors = select_neighbors(candidates, M_);
 
-    std::unique_lock lock(layer_states_[level]->mutex);
+    // Collect write nodes: new_id + selected neighbors.
+    std::set<NodeId> write_set;
+    write_set.insert(new_id);
+    for (NodeId n : neighbors)
+      write_set.insert(n);
 
-    if (layer_states_[level]->version.load(std::memory_order_relaxed) !=
-        start_version) {
-      return std::nullopt;
+    // Snapshot per-node versions before acquiring locks.
+    std::vector<std::pair<NodeId, uint64_t>> version_snapshots;
+    version_snapshots.reserve(write_set.size());
+    for (NodeId n : write_set) {
+      uint64_t v =
+          node_upper_states_[n]->version.load(std::memory_order_acquire);
+      version_snapshots.emplace_back(n, v);
+    }
+
+    // Acquire exclusive locks in sorted NodeId order (deadlock-free).
+    std::vector<std::unique_lock<std::shared_mutex>> locks;
+    locks.reserve(write_set.size());
+    for (NodeId n : write_set)
+      locks.emplace_back(node_upper_states_[n]->mutex);
+
+    // Validate: if any node was written to since our search, the candidate
+    // selection may be suboptimal -- retry.
+    for (const auto& [n, v] : version_snapshots) {
+      if (node_upper_states_[n]->version.load(std::memory_order_relaxed) != v)
+        return std::nullopt;
     }
 
     neighbors_[new_id][level] = neighbors;
@@ -485,7 +477,8 @@ class HybridOptimistic {
       }
     }
 
-    layer_states_[level]->version.fetch_add(1, std::memory_order_release);
+    for (NodeId n : write_set)
+      node_upper_states_[n]->version.fetch_add(1, std::memory_order_release);
 
     NodeId next = candidates.empty() ? entry_point : candidates.front().id;
     return std::make_pair(next, std::move(candidates));
@@ -496,10 +489,18 @@ class HybridOptimistic {
       NodeId new_id,
       NodeId entry_point,
       int level) {
-    std::unique_lock lock(layer_states_[level]->mutex);
-
     auto candidates = search_layer(data, entry_point, ef_construction_, level);
     auto neighbors = select_neighbors(candidates, M_);
+
+    std::set<NodeId> write_set;
+    write_set.insert(new_id);
+    for (NodeId n : neighbors)
+      write_set.insert(n);
+
+    std::vector<std::unique_lock<std::shared_mutex>> locks;
+    locks.reserve(write_set.size());
+    for (NodeId n : write_set)
+      locks.emplace_back(node_upper_states_[n]->mutex);
 
     neighbors_[new_id][level] = neighbors;
 
@@ -511,7 +512,8 @@ class HybridOptimistic {
       }
     }
 
-    layer_states_[level]->version.fetch_add(1, std::memory_order_release);
+    for (NodeId n : write_set)
+      node_upper_states_[n]->version.fetch_add(1, std::memory_order_release);
 
     NodeId next = candidates.empty() ? entry_point : candidates.front().id;
     return {next, std::move(candidates)};
@@ -859,41 +861,30 @@ class HybridOptimistic {
   NodeId optimistic_greedy_search(std::span<const T> query,
                                   NodeId entry_point,
                                   int level) const {
-    while (true) {
-      uint64_t start_version =
-          layer_states_[level]->version.load(std::memory_order_acquire);
+    NodeId current = entry_point;
+    float current_dist = compute_distance(query, current);
 
-      NodeId current = entry_point;
-      float current_dist = compute_distance(query, current);
-
-      bool improved = true;
-      while (improved) {
-        improved = false;
-
-        const auto& neighbors = neighbors_[current][level];
-        size_t num_neighbors = neighbors.size();
-        for (size_t i = 0; i < num_neighbors; ++i) {
-          if (i + 3 < num_neighbors) {
-            __builtin_prefetch(vectors_[neighbors[i + 3]].data(), 0, 3);
-          }
-
-          NodeId neighbor = neighbors[i];
-          if (deleted_[neighbor])
-            continue;
-          float neighbor_dist = compute_distance(query, neighbor);
-          if (neighbor_dist < current_dist) {
-            current = neighbor;
-            current_dist = neighbor_dist;
-            improved = true;
-          }
+    bool improved = true;
+    while (improved) {
+      improved = false;
+      std::vector<NodeId> curr_neighbors;
+      {
+        std::shared_lock nlk(node_upper_states_[current]->mutex);
+        curr_neighbors = neighbors_[current][level];
+      }
+      for (NodeId neighbor : curr_neighbors) {
+        if (deleted_[neighbor])
+          continue;
+        float neighbor_dist = compute_distance(query, neighbor);
+        if (neighbor_dist < current_dist) {
+          current = neighbor;
+          current_dist = neighbor_dist;
+          improved = true;
         }
       }
-
-      if (layer_states_[level]->version.load(std::memory_order_acquire) ==
-          start_version) {
-        return current;
-      }
     }
+
+    return current;
   }
 
   std::vector<Candidate> search_layer(std::span<const T> query,
@@ -916,7 +907,12 @@ class HybridOptimistic {
       if (curr_dist > results.top().distance)
         break;
 
-      for (NodeId neighbor : neighbors_[curr_id][level]) {
+      std::vector<NodeId> curr_neighbors;
+      {
+        std::shared_lock nlk(node_upper_states_[curr_id]->mutex);
+        curr_neighbors = neighbors_[curr_id][level];
+      }
+      for (NodeId neighbor : curr_neighbors) {
         if (visited.count(neighbor) > 0)
           continue;
         visited.insert(neighbor);
@@ -1028,7 +1024,6 @@ class HybridOptimistic {
   float mL_;
   std::atomic<size_t> nprobe_;
   size_t max_retries_;
-  int max_layers_;
 
   // Graph structure
   std::atomic<NodeId> entry_point_;
@@ -1048,7 +1043,7 @@ class HybridOptimistic {
 
   // Concurrency control
   mutable std::shared_mutex global_mutex_;
-  mutable std::vector<std::unique_ptr<LayerState>> layer_states_;
+  mutable std::vector<std::unique_ptr<PartitionState>> node_upper_states_;
   mutable std::vector<std::unique_ptr<PartitionState>> partition_states_;
   mutable std::shared_mutex partition_registry_mutex_;
   mutable ConflictStats conflict_stats_;

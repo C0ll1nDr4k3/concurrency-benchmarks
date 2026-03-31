@@ -1,12 +1,10 @@
 # AI-Generated Commit Messages
 
-This repository includes a git hook that automatically generates commit messages using GitHub CLI's Copilot based on your staged changes.
+This repository includes a git hook that optionally generates commit messages using GitHub Copilot CLI.
 
 ## How It Works
 
-When you run `git commit` (without `-m`), the hook uses `gh copilot suggest -t git` to analyze your staged changes and prepopulate the commit message editor with an AI-generated message in conventional commits format.
-
-If `gh` CLI is not available or fails, the hook gracefully does nothing and lets you write the message manually.
+When you run `git commit` (without `-m`), the hook checks if GitHub Copilot CLI is available. If it is, it generates a commit message in conventional commits format. If not, it does nothing and lets you write the message manually.
 
 ## Setup
 
@@ -15,50 +13,42 @@ The hook is automatically installed when you run:
 uv run pre-commit install --hook-type prepare-commit-msg
 ```
 
-This is already done if you've installed pre-commit hooks for this repo.
+## Prerequisites (Optional)
 
-## Prerequisites
+To enable AI-generated messages, install GitHub Copilot CLI:
 
-You need the GitHub CLI with Copilot access:
 ```bash
-# Install gh CLI if you don't have it
-brew install gh  # macOS
-# or follow: https://cli.github.com/
+# Via Homebrew
+brew install copilot-cli
+
+# Or via npm
+npm install -g @githubnext/github-copilot-cli
 
 # Authenticate
 gh auth login
-
-# Copilot should work automatically if you have access
 ```
 
-## Examples
+If Copilot CLI is not installed, the hook silently does nothing.
+
+## Example
 
 ```bash
-$ git add src/hnsw_coarse_optimistic.hpp
+$ git add design/HYBRID.md
 $ git commit
 
-# Editor opens with AI-generated message:
-# fix: Add missing mutex header include
+# If copilot is available, editor opens with:
+# docs: Add hybrid HNSW-IVF index design documentation
 #
-# Adds #include <mutex> to resolve std::unique_lock compilation errors
+# Documents architecture, concurrency control, and performance
+# characteristics of the hybrid index implementation.
+#
+# Otherwise, editor opens with empty message template
 ```
 
-## Customization
+## Notes
 
-The commit message is just a suggestion - edit it before finalizing. The hook only runs when:
-- You run `git commit` without `-m` flag
-- The commit message file is empty (no amend, merge, etc.)
-- There are staged changes
-- `gh` CLI is available
+- The message is just a suggestion - edit before finalizing
+- Hook only runs for `git commit` (not `-m`, `--amend`, merge, etc.)
+- Skip with `git commit --no-verify` if needed
+- Uninstall with `uv run pre-commit uninstall --hook-type prepare-commit-msg`
 
-## Disabling
-
-To skip the hook for a single commit:
-```bash
-git commit --no-verify
-```
-
-To uninstall:
-```bash
-uv run pre-commit uninstall --hook-type prepare-commit-msg
-```
