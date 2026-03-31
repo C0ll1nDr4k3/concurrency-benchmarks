@@ -20,6 +20,7 @@ COLOR_MAPPING = {
     "USearch": "#192940",  # Dark Blue
     "Weaviate": "#ddd347",  # Yellow
     "Redis": "#d82c20",  # Redis Red
+    "HnswLib": "#7b2d8b",  # Purple — ann-benchmarks hnswlib reference
 }
 
 STRATEGY_COLOR_MAPPING = {

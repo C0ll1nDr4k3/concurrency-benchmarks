@@ -85,6 +85,14 @@ except ImportError:
     duckdb = None
 
 try:
+    import hnswlib
+except ImportError:
+    print(
+        f"{Fore.YELLOW}hnswlib not installed - skipping related benchmarks{Style.RESET_ALL}"
+    )
+    hnswlib = None
+
+try:
     import nilvec
 except ImportError:
     print("Error: Could not import nilvec. Run `uv pip install -e .` first.")
@@ -483,6 +491,47 @@ class RedisIndex:
     def close(self):
         if hasattr(self.client, "close"):
             self.client.close()
+
+
+class HnswLibIndex:
+    """hnswlib HNSW — the ann-benchmarks reference implementation (pure Python, no Docker)."""
+
+    def __init__(self, dim, M=16, ef_construction=500):
+        if hnswlib is None:
+            raise ImportError("hnswlib not installed")
+        self.index = hnswlib.Index(space="l2", dim=dim)
+        self.index.init_index(
+            max_elements=1_200_000, ef_construction=ef_construction, M=M
+        )
+        self.index.ef = 200
+        self._count = 0
+        self._lock = threading.Lock()
+
+    def train(self, data):
+        pass
+
+    def insert(self, vec):
+        v = np.array([vec], dtype=np.float32)
+        with self._lock:
+            if self._count >= self.index.max_elements:
+                self.index.resize_index(self._count * 2)
+            self.index.add_items(v, [self._count])
+            self._count += 1
+
+    def search(self, query, k, ef=None):
+        v = np.array([query], dtype=np.float32)
+        with self._lock:
+            if ef is not None:
+                self.index.ef = ef
+            labels, distances = self.index.knn_query(v, k=k)
+        return type(
+            "Result",
+            (object,),
+            {"ids": labels[0].tolist(), "distances": distances[0].tolist()},
+        )()
+
+    def set_nprobe(self, n):
+        pass
 
 
 # --- Helpers ---
@@ -1488,7 +1537,7 @@ def _run_single_dataset(args, dataset_path):
     hnsw_args = [16, 200]
     # IVFFlat: nlist=sqrt(N), nprobe variable
     nlist = int(NUM_VECTORS**0.5)
-    ivf_args = [nlist, sqrt(nlist)]
+    ivf_args = [nlist, int(sqrt(nlist))]
 
     # --- ANN Benchmark ---
     if not args.skip_recall:
@@ -1501,6 +1550,11 @@ def _run_single_dataset(args, dataset_path):
         # IVFFlat family: sweep nprobe
         nprobe_values = [1, 2, 4, 8, 16, 32, 64, 128]
         ivf_params = [{"nprobe": np} for np in nprobe_values if np < nlist]
+
+        # ann-benchmarks canonical ef sweep for hnswlib reference
+        hnswlib_params = [
+            {"ef": ef} for ef in [10, 20, 40, 80, 120, 200, 400, 600, 800]
+        ]
 
         ann_indexes = [
             # HNSW family
@@ -1517,6 +1571,9 @@ def _run_single_dataset(args, dataset_path):
             (nilvec.HybridOptimistic, "Hybrid Opt", hnsw_args, hnsw_params),
             (nilvec.HybridPessimistic, "Hybrid Pess", hnsw_args, hnsw_params),
         ]
+        # ann-benchmarks reference implementations (pure Python, no Docker required)
+        if hnswlib is not None:
+            ann_indexes.append((HnswLibIndex, "HnswLib", [16, 500], hnswlib_params))
 
         for index_cls, index_name, idx_args, search_params in ann_indexes:
             res = benchmark_recall_vs_qps(
@@ -1609,6 +1666,8 @@ def _run_single_dataset(args, dataset_path):
             externals.append((FaissIVF, "FAISS IVF", ivf_args))
         if usearch:
             externals.append((USearchIndex, "USearch", hnsw_args))
+        if hnswlib:
+            externals.append((HnswLibIndex, "HnswLib", [16, 500]))
         # if pymilvus:
         #     externals.append((MilvusIndex, "Milvus", hnsw_args))
         if weaviate:
