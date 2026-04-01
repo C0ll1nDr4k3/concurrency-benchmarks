@@ -171,6 +171,24 @@ inline float squared_distance(std::span<const T, N> a,
 }
 
 /**
+ * @brief Compute squared Euclidean distance between two vectors of different
+ * element types (e.g., int8_t vs float). Both spans must have the same length.
+ *
+ * Used when IVFFlat compares quantized (int8_t) query/stored vectors against
+ * float32 centroids, which are always kept in full precision.
+ */
+template <typename A, typename B>
+  requires(!std::is_same_v<A, B>)
+inline float squared_distance(std::span<const A> a, std::span<const B> b) {
+  float dist = 0.0f;
+  for (size_t i = 0; i < a.size(); ++i) {
+    float diff = static_cast<float>(a[i]) - static_cast<float>(b[i]);
+    dist += diff * diff;
+  }
+  return dist;
+}
+
+/**
  * @brief Compute Euclidean distance between two vectors.
  */
 template <typename T>

@@ -98,12 +98,51 @@ except ImportError:
     print("Error: Could not import nilvec. Run `uv pip install -e .` first.")
     sys.exit(1)
 
+
+def make_quantized_cls(inner_cls, sq):
+    """Wrap an SQ8 index class so it accepts float32 vectors transparently.
+
+    Returns a drop-in replacement for any nilvec index class: the wrapper
+    encodes float32 insert/search inputs via *sq* before forwarding to the
+    inner int8_t index, so benchmark functions need no changes.
+    """
+
+    class QuantizedIndex:
+        def __init__(self, dim, *args):
+            self._inner = inner_cls(dim, *args)
+            self._sq = sq
+
+        def train(self, data):
+            encoded = [self._sq.encode(v) for v in data]
+            self._inner.train(encoded)
+
+        def insert(self, vec):
+            return self._inner.insert(self._sq.encode(vec))
+
+        def search(self, query, k, ef=0):
+            encoded = self._sq.encode(query)
+            if ef:
+                return self._inner.search(encoded, k, ef)
+            return self._inner.search(encoded, k)
+
+        def set_nprobe(self, nprobe):
+            self._inner.set_nprobe(nprobe)
+
+        def size(self):
+            return self._inner.size()
+
+        def max_level(self):
+            return self._inner.max_level()
+
+    return QuantizedIndex
+
+
 # --- Configuration ---
 DIM = 128
 # These will be overridden by dataset if present
 NUM_VECTORS = 10000
 NUM_QUERIES = 1000
-K = 10
+K = 10  # per ANN Benchmarks
 RW_RATIO = 0.1
 
 # Thread counts to test
@@ -1556,6 +1595,10 @@ def _run_single_dataset(args, dataset_path):
             {"ef": ef} for ef in [10, 20, 40, 80, 120, 200, 400, 600, 800]
         ]
 
+        # Train SQ8 quantizer once on the full dataset
+        sq = nilvec.ScalarQuantizer(DIM)
+        sq.train(data)
+
         ann_indexes = [
             # HNSW family
             (nilvec.HNSWVanilla, "HNSW Vanilla", hnsw_args, hnsw_params),
@@ -1570,6 +1613,31 @@ def _run_single_dataset(args, dataset_path):
             # Hybrid family
             (nilvec.HybridOptimistic, "Hybrid Opt", hnsw_args, hnsw_params),
             (nilvec.HybridPessimistic, "Hybrid Pess", hnsw_args, hnsw_params),
+            # SQ8 (int8 scalar-quantized) variants
+            (
+                make_quantized_cls(nilvec.HNSWVanillaSQ8, sq),
+                "HNSW Vanilla SQ8",
+                hnsw_args,
+                hnsw_params,
+            ),
+            (
+                make_quantized_cls(nilvec.HNSWCoarseOptimisticSQ8, sq),
+                "HNSW Coarse Opt SQ8",
+                hnsw_args,
+                hnsw_params,
+            ),
+            (
+                make_quantized_cls(nilvec.HNSWFinePessimisticSQ8, sq),
+                "HNSW Fine Pess SQ8",
+                hnsw_args,
+                hnsw_params,
+            ),
+            (
+                make_quantized_cls(nilvec.IVFFlatVanillaSQ8, sq),
+                "IVFFlat Vanilla SQ8",
+                ivf_args,
+                ivf_params,
+            ),
         ]
         # ann-benchmarks reference implementations (pure Python, no Docker required)
         if hnswlib is not None:

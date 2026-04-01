@@ -154,7 +154,7 @@ class IVFFlatCoarseOptimistic {
     centroid_candidates.reserve(nlist_);
     for (size_t c = 0; c < nlist_; ++c) {
       float dist = squared_distance(Traits::make_span(query),
-                                    Traits::make_span(centroids_[c]));
+                                    std::span<const float>(centroids_[c]));
       centroid_candidates.push_back({static_cast<NodeId>(c), dist});
     }
     std::partial_sort(centroid_candidates.begin(),
@@ -321,7 +321,7 @@ class IVFFlatCoarseOptimistic {
       float total_dist = 0.0f;
       for (size_t i = 0; i < data.size(); ++i) {
         float d = squared_distance(Traits::make_span(data[i]),
-                                   Traits::make_span(centroids.back()));
+                                   std::span<const float>(centroids.back()));
         min_distances[i] = std::min(min_distances[i], d);
         total_dist += min_distances[i];
       }
@@ -353,10 +353,10 @@ class IVFFlatCoarseOptimistic {
       float dist;
       if constexpr (std::is_same_v<VecType, std::vector<T>>) {
         dist = squared_distance(Traits::make_span(vec),
-                                Traits::make_span(centroids_[c]));
+                                std::span<const float>(centroids_[c]));
       } else {
         dist = squared_distance(Traits::make_span(vec),
-                                Traits::make_span(centroids_[c]));
+                                std::span<const float>(centroids_[c]));
       }
 
       if (dist < min_dist) {

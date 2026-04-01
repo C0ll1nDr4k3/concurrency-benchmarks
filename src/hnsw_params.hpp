@@ -23,7 +23,7 @@ struct HNSWParams {
   size_t M = 16;
   /// Dynamic candidate list size during construction.
   size_t ef_construction = 200;
-  /// Level generation factor (0 → 1/ln(M)).
+  /// Level generation factor (if mL=0 → mL=1/ln(M)).
   float mL = 0.0f;
   /// Expected maximum number of vectors. Used to pre-allocate storage.
   /// 0 means no pre-allocation.

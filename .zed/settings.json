@@ -1,8 +1,11 @@
 {
   "languages": {
     "Python": {
-      "language_servers": ["basedpyright", "!pyright"]
-    }
+      "language_servers": ["basedpyright", "!pyright"],
+    },
+    "C++": {
+      "language_servers": ["clangd"],
+    },
   },
   "lsp": {
     "basedpyright": {
@@ -13,14 +16,27 @@
           "inlayHints": {
             "variableTypes": true,
             "functionReturnTypes": true,
-            "callArgumentNames": false,
-            "genericTypes": true
-          }
+            "callArgumentNames": true,
+            "genericTypes": true,
+          },
         },
         "python": {
-          "pythonPath": ".venv/bin/python"
-        }
-      }
-    }
-  }
+          "pythonPath": ".venv/bin/python",
+        },
+      },
+    },
+    "clangd": {
+      "initialization_options": {
+        "compilationDatabasePath": "builddir",
+        "index": {
+          "onChange": true,
+          "background": "build",
+        },
+        "clang-tidy": {
+          "enable": true,
+        },
+      },
+      "settings": {},
+    },
+  },
 }
