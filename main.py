@@ -238,14 +238,14 @@ class FaissHNSW:
         # Faiss expects numpy arrays
         v = np.array([vec], dtype=np.float32)
         with self._lock:
-            self.index.add(v)
+            self.index.add(v)  # type: ignore[call-arg]
 
     def search(self, query, k, ef=None):
         v = np.array([query], dtype=np.float32)
         with self._lock:
             if ef is not None:
                 self.index.hnsw.efSearch = ef
-            D, I = self.index.search(v, k)
+            D, I = self.index.search(v, k)  # type: ignore[call-arg]
         return type(
             "Result", (object,), {"ids": I[0].tolist(), "distances": D[0].tolist()}
         )()
@@ -254,7 +254,8 @@ class FaissHNSW:
         pass  # Not applicable
 
     def set_num_threads(self, n):
-        faiss.omp_set_num_threads(n)
+        if faiss is not None:
+            faiss.omp_set_num_threads(n)
 
     def train(self, data):
         pass  # Not needed
@@ -273,17 +274,17 @@ class FaissIVF:
     def train(self, data):
         # Faiss training needs numpy
         d = np.array(data, dtype=np.float32)
-        self.index.train(d)
+        self.index.train(d)  # type: ignore[call-arg]
 
     def insert(self, vec):
         v = np.array([vec], dtype=np.float32)
         with self._lock:
-            self.index.add(v)
+            self.index.add(v)  # type: ignore[call-arg]
 
     def search(self, query, k, ef=None):
         v = np.array([query], dtype=np.float32)
         with self._lock:
-            D, I = self.index.search(v, k)
+            D, I = self.index.search(v, k)  # type: ignore[call-arg]
         return type(
             "Result", (object,), {"ids": I[0].tolist(), "distances": D[0].tolist()}
         )()
@@ -293,7 +294,8 @@ class FaissIVF:
             self.index.nprobe = n
 
     def set_num_threads(self, n):
-        faiss.omp_set_num_threads(n)
+        if faiss is not None:
+            faiss.omp_set_num_threads(n)
 
 
 class USearchIndex:
@@ -320,7 +322,7 @@ class USearchIndex:
     def search(self, query, k, ef=None):
         if ef is not None:
             try:
-                self.index.change_expansion_search(ef)
+                self.index.change_expansion_search(ef)  # type: ignore[attr-defined]
             except:
                 pass
         v = np.array(query, dtype=np.float32)
@@ -429,7 +431,7 @@ class WeaviateIndex:
         res = self.collection.query.near_vector(
             near_vector=query,
             limit=k,
-            return_metadata=weaviate.classes.query.MetadataQuery(distance=True),
+            return_metadata=weaviate.classes.query.MetadataQuery(distance=True),  # type: ignore[attr-defined]
         )
 
         ids = [obj.uuid for obj in res.objects]
@@ -484,7 +486,7 @@ class RedisIndex:
             ),
         )
         definition = IndexDefinition(prefix=[self.prefix], index_type=IndexType.HASH)
-        self.client.ft(self.index_name).create_index(schema, definition=definition)
+        self.client.ft(self.index_name).create_index([schema[0]], definition=definition)  # type: ignore[arg-type]
 
     def insert(self, vec):
         with self._id_lock:
@@ -507,7 +509,7 @@ class RedisIndex:
             .dialect(2)
         )
         if ef is not None:
-            q = q.ef_runtime(int(ef))
+            q = q.ef_runtime(int(ef))  # type: ignore[attr-defined]
 
         res = self.client.ft(self.index_name).search(
             q, query_params={"vec": np.array(query, dtype=np.float32).tobytes()}
@@ -515,7 +517,7 @@ class RedisIndex:
 
         ids = []
         distances = []
-        for doc in res.docs:
+        for doc in res.docs:  # type: ignore[attr-defined]
             doc_id = doc.id.decode() if isinstance(doc.id, bytes) else str(doc.id)
             ids.append(doc_id.split(self.prefix, 1)[-1])
             distances.append(float(doc.score))
@@ -695,7 +697,7 @@ def load_dataset(path, limit=0):
         if limit > 0:
             gt = None  # Recompute
         else:
-            gt = [list(map(int, vec[:K])) for vec in f["neighbors"]]
+            gt = [list(map(int, vec[:K])) for vec in f["neighbors"]]  # type: ignore[misc]
     else:
         gt = None
 
@@ -1227,6 +1229,9 @@ def benchmark_recall_vs_qps(
 
     results = []
 
+    if search_params is None:
+        search_params = [{}]
+
     for params in search_params:
         # Apply search parameters
         if "nprobe" in params:
@@ -1237,6 +1242,7 @@ def benchmark_recall_vs_qps(
         res_ids_list = []
         latencies_ms = []
         for q in queries:
+            t0 = 0.0  # Initialize to avoid unbound variable
             sample = latency_sample_rate >= 1.0 or random.random() < latency_sample_rate
             if sample:
                 t0 = time.perf_counter()
@@ -1709,7 +1715,11 @@ def _run_single_dataset(args, dataset_path):
 
         # Define indexes to compare
         indexes = [
-            # (nilvec.HNSWVanilla, "HNSW Vanilla", hnsw_args),
+            # Hybrid
+            (nilvec.HybridPessimistic, "Hybrid Pess", hnsw_args),
+            (nilvec.HybridOptimistic, "Hybrid Opt", hnsw_args),
+            # HNSW
+            (nilvec.HNSWVanilla, "HNSW Vanilla", hnsw_args),
             (nilvec.HNSWCoarseOptimistic, "HNSW Coarse Opt", hnsw_args),
             (nilvec.HNSWCoarsePessimistic, "HNSW Coarse Pess", hnsw_args),
             (nilvec.HNSWFineOptimistic, "HNSW Fine Opt", hnsw_args),
@@ -1717,9 +1727,6 @@ def _run_single_dataset(args, dataset_path):
             # IVFFlat
             (nilvec.IVFFlatCoarseOptimistic, "IVF Coarse Opt", ivf_args),
             (nilvec.IVFFlatFineOptimistic, "IVF Fine Opt", ivf_args),
-            # Hybrid
-            (nilvec.HybridPessimistic, "Hybrid Pess", hnsw_args),
-            (nilvec.HybridOptimistic, "Hybrid Opt", hnsw_args),
         ]
 
         # Run benchmarks and collect data
