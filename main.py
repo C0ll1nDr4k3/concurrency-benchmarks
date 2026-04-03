@@ -200,6 +200,8 @@ def format_throughput_line(
     throughput,
     prev,
     build_time=None,
+    search_latencies=None,
+    insert_latencies=None,
 ):
     if prev is None:
         throughput_color = Fore.CYAN
@@ -215,12 +217,26 @@ def format_throughput_line(
             f"{Fore.BLUE}Build:{Style.RESET_ALL} "
             f"{Fore.WHITE}{build_time:.2f}s{Style.RESET_ALL} | "
         )
+    lat_str = ""
+    if search_latencies is not None:
+        s_p50, s_p95, s_p99 = search_latencies
+        lat_str += (
+            f" | {Fore.BLUE}R p50/p99:{Style.RESET_ALL} "
+            f"{Fore.GREEN}{s_p50:.1f}/{s_p99:.1f}ms{Style.RESET_ALL}"
+        )
+    if insert_latencies is not None:
+        i_p50, i_p95, i_p99 = insert_latencies
+        lat_str += (
+            f" | {Fore.BLUE}W p50/p99:{Style.RESET_ALL} "
+            f"{Fore.GREEN}{i_p50:.1f}/{i_p99:.1f}ms{Style.RESET_ALL}"
+        )
     return (
         f"  {Fore.BLUE}Threads:{Style.RESET_ALL} {num_threads} "
         f"{Fore.WHITE}(W={num_insert_threads}, R={num_search_threads}){Style.RESET_ALL} -> "
         f"{build_str}"
         f"{Fore.BLUE}Throughput:{Style.RESET_ALL} "
         f"{Style.BRIGHT}{throughput_color}{throughput:.0f}{Style.RESET_ALL} ops/s"
+        f"{lat_str}"
     )
 
 
@@ -875,6 +891,7 @@ class BenchmarkResultsStore:
                 rw_ratio DOUBLE,
                 thread_counts_json VARCHAR,
                 only_external BOOLEAN,
+                internal_only BOOLEAN,
                 skip_recall BOOLEAN,
                 skip_throughput BOOLEAN,
                 limit_rows INTEGER
@@ -889,7 +906,13 @@ class BenchmarkResultsStore:
                 thread_count INTEGER,
                 throughput DOUBLE,
                 conflict_rate DOUBLE,
-                is_external BOOLEAN
+                is_external BOOLEAN,
+                search_p50_ms DOUBLE,
+                search_p95_ms DOUBLE,
+                search_p99_ms DOUBLE,
+                insert_p50_ms DOUBLE,
+                insert_p95_ms DOUBLE,
+                insert_p99_ms DOUBLE
             )
             """
         )
@@ -913,6 +936,20 @@ class BenchmarkResultsStore:
         for col in ("p50_ms", "p95_ms", "p99_ms"):
             try:
                 self.conn.execute(f"ALTER TABLE recall_points ADD COLUMN {col} DOUBLE")
+            except Exception:
+                pass  # Column already exists
+        for col in (
+            "search_p50_ms",
+            "search_p95_ms",
+            "search_p99_ms",
+            "insert_p50_ms",
+            "insert_p95_ms",
+            "insert_p99_ms",
+        ):
+            try:
+                self.conn.execute(
+                    f"ALTER TABLE throughput_points ADD COLUMN {col} DOUBLE"
+                )
             except Exception:
                 pass  # Column already exists
         self.conn.execute(
@@ -955,9 +992,9 @@ class BenchmarkResultsStore:
             INSERT INTO benchmark_runs (
                 run_id, run_tag, dataset_name, dataset_path, dim, num_vectors,
                 num_queries, k, rw_ratio, thread_counts_json, only_external,
-                skip_recall, skip_throughput, limit_rows
+                internal_only, skip_recall, skip_throughput, limit_rows
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 run_id,
@@ -971,6 +1008,7 @@ class BenchmarkResultsStore:
                 run_meta["rw_ratio"],
                 json.dumps(run_meta["thread_counts"]),
                 run_meta["only_external"],
+                run_meta["internal_only"],
                 run_meta["skip_recall"],
                 run_meta["skip_throughput"],
                 run_meta["limit_rows"],
@@ -985,14 +1023,21 @@ class BenchmarkResultsStore:
         conflict_results,
         external_names,
         thread_counts,
+        latency_results=None,
     ):
+        if latency_results is None:
+            latency_results = {}
         rows = []
         for index_name, values in throughput_results.items():
             conflicts = conflict_results.get(index_name, [0] * len(values))
+            lats = latency_results.get(
+                index_name, [(None, None, None, None, None, None)] * len(values)
+            )
             is_external = index_name in set(external_names)
-            for thread_count, throughput, conflict_rate in zip(
-                thread_counts, values, conflicts
+            for thread_count, throughput, conflict_rate, lat in zip(
+                thread_counts, values, conflicts, lats
             ):
+                s_p50, s_p95, s_p99, i_p50, i_p95, i_p99 = lat
                 rows.append(
                     (
                         run_id,
@@ -1001,14 +1046,22 @@ class BenchmarkResultsStore:
                         float(throughput),
                         float(conflict_rate),
                         bool(is_external),
+                        float(s_p50) if s_p50 is not None else None,
+                        float(s_p95) if s_p95 is not None else None,
+                        float(s_p99) if s_p99 is not None else None,
+                        float(i_p50) if i_p50 is not None else None,
+                        float(i_p95) if i_p95 is not None else None,
+                        float(i_p99) if i_p99 is not None else None,
                     )
                 )
         if rows:
             self.conn.executemany(
                 """
                 INSERT INTO throughput_points (
-                    run_id, index_name, thread_count, throughput, conflict_rate, is_external
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    run_id, index_name, thread_count, throughput, conflict_rate, is_external,
+                    search_p50_ms, search_p95_ms, search_p99_ms,
+                    insert_p50_ms, insert_p95_ms, insert_p99_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 rows,
             )
@@ -1297,6 +1350,7 @@ def benchmark_throughput_vs_threads(
     index_args=None,
     rw_ratio=0.5,
     preload_ratio=0.5,
+    latency_sample_rate=0.0,
 ):
     """
     Run Throughput vs Threads benchmark with configurable R/W split.
@@ -1327,6 +1381,17 @@ def benchmark_throughput_vs_threads(
     results = []
     conflict_rates = []
     build_times = []
+    latency_data = []
+
+    # Pre-compute a fixed sampling stride for the whole run.
+    # Using a stride avoids a per-op random() call and gives uniform coverage
+    # across the run, unlike Bernoulli sampling which can cluster.
+    if latency_sample_rate >= 1.0:
+        sample_interval = 1
+    elif latency_sample_rate > 0.0:
+        sample_interval = max(1, round(1.0 / latency_sample_rate))
+    else:
+        sample_interval = 0  # disabled
 
     stop_event = threading.Event()
 
@@ -1361,9 +1426,14 @@ def benchmark_throughput_vs_threads(
         threads = []
 
         # Define tasks
-        def search_worker(qs):
+        def search_worker(qs, latency_list):
             nonlocal ops_count
             local_ops = 0
+            # Each thread picks a random start offset within the stride so
+            # threads don't all sample the same operation indices.
+            ops_until_next = (
+                random.randint(0, sample_interval - 1) if sample_interval > 0 else -1
+            )
             # Run for fixed iterations
             for _ in range(5):
                 if stop_event.is_set():
@@ -1371,17 +1441,36 @@ def benchmark_throughput_vs_threads(
                 for q in qs:
                     if stop_event.is_set():
                         break
-                    index.search(q, k)
+                    if ops_until_next == 0:
+                        t0 = time.perf_counter()
+                        index.search(q, k)
+                        latency_list.append((time.perf_counter() - t0) * 1000)
+                        ops_until_next = sample_interval - 1
+                    else:
+                        index.search(q, k)
+                        if ops_until_next > 0:
+                            ops_until_next -= 1
                     local_ops += 1
             return local_ops
 
-        def insert_worker(vecs):
+        def insert_worker(vecs, latency_list):
             nonlocal ops_count
             local_ops = 0
+            ops_until_next = (
+                random.randint(0, sample_interval - 1) if sample_interval > 0 else -1
+            )
             for v in vecs:
                 if stop_event.is_set():
                     break
-                index.insert(v)
+                if ops_until_next == 0:
+                    t0 = time.perf_counter()
+                    index.insert(v)
+                    latency_list.append((time.perf_counter() - t0) * 1000)
+                    ops_until_next = sample_interval - 1
+                else:
+                    index.insert(v)
+                    if ops_until_next > 0:
+                        ops_until_next -= 1
                 local_ops += 1
             return local_ops
 
@@ -1400,6 +1489,11 @@ def benchmark_throughput_vs_threads(
 
         num_search_threads = num_threads - num_insert_threads
 
+        # Per-thread latency accumulators — each thread owns its own list,
+        # so no locking is needed during collection.
+        search_lat_lists = [[] for _ in range(num_search_threads)]
+        insert_lat_lists = [[] for _ in range(num_insert_threads)]
+
         # Launch Insert Threads
         if num_insert_threads > 0:
             chunk_s = len(remaining_data) // num_insert_threads
@@ -1411,7 +1505,8 @@ def benchmark_throughput_vs_threads(
                     else len(remaining_data)
                 )
                 t = threading.Thread(
-                    target=insert_worker, args=(remaining_data[start:end],)
+                    target=insert_worker,
+                    args=(remaining_data[start:end], insert_lat_lists[i]),
                 )
                 threads.append(t)
                 t.start()
@@ -1419,7 +1514,9 @@ def benchmark_throughput_vs_threads(
         # Launch Search Threads
         if num_search_threads > 0:
             for i in range(num_search_threads):
-                t = threading.Thread(target=search_worker, args=(queries,))
+                t = threading.Thread(
+                    target=search_worker, args=(queries, search_lat_lists[i])
+                )
                 threads.append(t)
                 t.start()
 
@@ -1436,9 +1533,26 @@ def benchmark_throughput_vs_threads(
 
             if hasattr(index, "close"):
                 index.close()
-            return None, None, None
+            return None, None, None, None
 
         duration = time.time() - start_time
+
+        # Merge per-thread latency samples and compute percentiles
+        all_search_lat = [l for lst in search_lat_lists for l in lst]
+        all_insert_lat = [l for lst in insert_lat_lists for l in lst]
+
+        def _pcts(lats):
+            if not lats:
+                return None, None, None
+            return (
+                float(np.percentile(lats, 50)),
+                float(np.percentile(lats, 95)),
+                float(np.percentile(lats, 99)),
+            )
+
+        s_p50, s_p95, s_p99 = _pcts(all_search_lat)
+        i_p50, i_p95, i_p99 = _pcts(all_insert_lat)
+        latency_data.append((s_p50, s_p95, s_p99, i_p50, i_p95, i_p99))
 
         # Estimate ops
         total_inserts = 0
@@ -1460,6 +1574,8 @@ def benchmark_throughput_vs_threads(
                 throughput,
                 prev,
                 build_time,
+                search_latencies=(s_p50, s_p95, s_p99) if s_p50 is not None else None,
+                insert_latencies=(i_p50, i_p95, i_p99) if i_p50 is not None else None,
             )
         )
         results.append(throughput)
@@ -1480,7 +1596,7 @@ def benchmark_throughput_vs_threads(
         f"  {Fore.WHITE}Elapsed time for {Style.BRIGHT}{index_name}{Style.RESET_ALL}"
         f"{Fore.WHITE}: {_format_elapsed(index_elapsed)}{Style.RESET_ALL}"
     )
-    return results, conflict_rates, build_times
+    return results, conflict_rates, build_times, latency_data
 
 
 # --- Main ---
@@ -1550,7 +1666,8 @@ def _run_single_dataset(args, dataset_path):
         "rw_ratio": args.rw_ratio,
         "rw_bands": args._rw_bands,
         "thread_counts": THREAD_COUNTS,
-        "only_external": args.only_external,
+        "only_external": args.external_only,
+        "internal_only": args.internal_only,
         "skip_recall": args.skip_recall,
         "skip_throughput": args.skip_throughput,
         "limit_rows": args.limit,
@@ -1733,6 +1850,7 @@ def _run_single_dataset(args, dataset_path):
         throughput_results = {}
         conflict_results = {}
         build_time_results = {}
+        latency_results = {}
 
         # External Indexes definition (used by both modes)
         externals = []
@@ -1777,8 +1895,10 @@ def _run_single_dataset(args, dataset_path):
 
             # External Indexes (run first -- these sometimes crash)
             for cls, name, iargs in externals:
+                if args.internal_only:
+                    continue
                 try:
-                    res, conflicts, build = benchmark_throughput_vs_threads(
+                    res, conflicts, build, lats = benchmark_throughput_vs_threads(
                         cls,
                         name,
                         data,
@@ -1787,21 +1907,23 @@ def _run_single_dataset(args, dataset_path):
                         iargs,
                         rw_ratio=rw_schedule,
                         preload_ratio=args.preload_ratio,
+                        latency_sample_rate=args.latency_sample_rate,
                     )
                     if res is None:
                         continue
                     throughput_results[_result_key(name)] = res
                     conflict_results[_result_key(name)] = conflicts
                     build_time_results[_result_key(name)] = build
+                    latency_results[_result_key(name)] = lats
                 except Exception as e:
                     print(f"Skipping {name}: {e}")
 
             # Internal Indexes
             for cls, name, iargs in indexes:
-                if args.only_external:
+                if args.external_only:
                     continue
                 try:
-                    res, conflicts, build = benchmark_throughput_vs_threads(
+                    res, conflicts, build, lats = benchmark_throughput_vs_threads(
                         cls,
                         name,
                         data,
@@ -1810,12 +1932,14 @@ def _run_single_dataset(args, dataset_path):
                         iargs,
                         rw_ratio=rw_schedule,
                         preload_ratio=args.preload_ratio,
+                        latency_sample_rate=args.latency_sample_rate,
                     )
                     if res is None:
                         continue
                     throughput_results[_result_key(name)] = res
                     conflict_results[_result_key(name)] = conflicts
                     build_time_results[_result_key(name)] = build
+                    latency_results[_result_key(name)] = lats
                 except Exception as e:
                     print(f"Skipping {name}: {e}")
 
@@ -1823,6 +1947,7 @@ def _run_single_dataset(args, dataset_path):
         results_cache["throughput"] = throughput_results
         results_cache["conflicts"] = conflict_results
         results_cache["build_times"] = build_time_results
+        results_cache["latency_results"] = latency_results
         results_cache["external_names"] = [e[1] for e in externals]
 
         if args.cross_pollinate and results_store and run_id:
@@ -1876,6 +2001,7 @@ def _run_single_dataset(args, dataset_path):
                 results_cache["conflicts"],
                 results_cache["external_names"],
                 THREAD_COUNTS,
+                latency_results=results_cache.get("latency_results"),
             )
         if results_cache["recall_vs_qps"]["runs"]:
             results_store.save_recall_runs(
@@ -1938,7 +2064,10 @@ def run_benchmark(args=None):
             help="Limit number of vectors (0 = no limit)",
         )
         parser.add_argument(
-            "--only-external", action="store_true", help="Run only external benchmarks"
+            "--external-only", action="store_true", help="Run only external benchmarks"
+        )
+        parser.add_argument(
+            "--internal-only", action="store_true", help="Run only internal benchmarks"
         )
         parser.add_argument(
             "--save-results",
