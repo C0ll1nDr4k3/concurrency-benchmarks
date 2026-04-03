@@ -222,9 +222,9 @@ class HybridPessimistic {
       }
     }
 
-    global_read_lock.unlock();
-
-    // Update entry point and max level if necessary
+    // Update entry point and max level if necessary (must happen before
+    // releasing the global read lock so that a concurrent search that sees
+    // the new entry_point also sees the node's fully-connected edges).
     int expected_level = curr_max_level;
     while (new_level > expected_level) {
       if (max_level_.compare_exchange_weak(expected_level, new_level,
@@ -233,6 +233,8 @@ class HybridPessimistic {
         break;
       }
     }
+
+    global_read_lock.unlock();
 
     return new_id;
   }
