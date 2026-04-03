@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <deque>
 #include <memory>
 #include <set>
 #include <shared_mutex>
@@ -787,7 +788,7 @@ class HybridPessimistic {
   // Concurrency control
   mutable std::shared_mutex global_mutex_;
   mutable std::vector<std::unique_ptr<std::shared_mutex>> node_mutexes_;
-  mutable std::vector<std::unique_ptr<std::shared_mutex>> partition_mutexes_;
+  mutable std::deque<std::unique_ptr<std::shared_mutex>> partition_mutexes_;
   mutable std::shared_mutex partition_registry_mutex_;
 
   // RNG

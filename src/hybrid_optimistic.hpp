@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <deque>
 #include <memory>
 #include <set>
 #include <shared_mutex>
@@ -1046,7 +1047,7 @@ class HybridOptimistic {
   // Concurrency control
   mutable std::shared_mutex global_mutex_;
   mutable std::vector<std::unique_ptr<PartitionState>> node_upper_states_;
-  mutable std::vector<std::unique_ptr<PartitionState>> partition_states_;
+  mutable std::deque<std::unique_ptr<PartitionState>> partition_states_;
   mutable std::shared_mutex partition_registry_mutex_;
   mutable ConflictStats conflict_stats_;
 
