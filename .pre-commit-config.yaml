@@ -21,10 +21,3 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-commit]
-
-      - id: ai-commit-msg
-        name: AI commit message generator
-        entry: .git-hooks/ai-commit-msg
-        language: script
-        stages: [prepare-commit-msg]
-        always_run: true

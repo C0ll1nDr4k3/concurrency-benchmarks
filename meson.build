@@ -61,7 +61,17 @@ if python_bindings and py.found()
         )
 
         py.install_sources(
-            ['nilvec/__init__.py'],
+            [
+                'nilvec/__init__.py',
+                'nilvec/benchmarks.py',
+                'nilvec/cli.py',
+                'nilvec/config.py',
+                'nilvec/datasets.py',
+                'nilvec/external_indexes.py',
+                'nilvec/formatting.py',
+                'nilvec/metrics.py',
+                'nilvec/store.py',
+            ],
             subdir: 'nilvec',
         )
     else

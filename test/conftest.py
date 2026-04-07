@@ -5,3 +5,9 @@ import sys
 _builddir = os.path.join(os.path.dirname(__file__), "..", "builddir")
 if _builddir not in sys.path:
     sys.path.insert(0, _builddir)
+
+# Expose the project root so auxiliary packages (e.g. plotting) are importable.
+_projectroot = os.path.join(os.path.dirname(__file__), "..")
+_projectroot = os.path.normpath(_projectroot)
+if _projectroot not in sys.path:
+    sys.path.insert(0, _projectroot)
