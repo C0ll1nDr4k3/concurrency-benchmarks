@@ -74,6 +74,13 @@ class BenchmarkResultsStore:
             )
             """
         )
+        # Migration: add internal_only column if it doesn't exist
+        try:
+            self.conn.execute(
+                "ALTER TABLE benchmark_runs ADD COLUMN internal_only BOOLEAN"
+            )
+        except Exception:
+            pass  # Column already exists
         # Migration: add latency columns to existing tables that predate them
         for col in ("p50_ms", "p95_ms", "p99_ms"):
             try:
