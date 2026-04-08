@@ -67,27 +67,33 @@ PYBIND11_MODULE(_nilvec, m) {
   // --- HNSW Indexes ---
   // Helper to bind HNSW classes
   auto bind_hnsw = [&](auto tag, const std::string& name,
-                       bool has_stats = false) {
+                       bool has_stats = false, bool release_gil = true) {
     using Index = typename decltype(tag)::type;
     auto cls =
         py::class_<Index>(m, name.c_str())
             .def(py::init<Dim, size_t, size_t, float>(), py::arg("dim"),
                  py::arg("M") = 16, py::arg("ef_construction") = 200,
                  py::arg("mL") = 0.0f)
-            .def(
-                "insert",
-                [](Index& self, const std::vector<float>& data) {
-                  return self.insert(std::span<const float>(data));
-                },
-                py::call_guard<py::gil_scoped_release>())
+            .def("insert",
+                 [release_gil](Index& self, const std::vector<float>& data) {
+                   if (release_gil) {
+                     py::gil_scoped_release gil;
+                     return self.insert(std::span<const float>(data));
+                   }
+                   return self.insert(std::span<const float>(data));
+                 })
             .def(
                 "search",
-                [](const Index& self, const std::vector<float>& query, size_t k,
-                   size_t ef) {
+                [release_gil](const Index& self,
+                              const std::vector<float>& query, size_t k,
+                              size_t ef) {
+                  if (release_gil) {
+                    py::gil_scoped_release gil;
+                    return self.search(std::span<const float>(query), k, ef);
+                  }
                   return self.search(std::span<const float>(query), k, ef);
                 },
-                py::arg("query"), py::arg("k"), py::arg("ef") = 0,
-                py::call_guard<py::gil_scoped_release>())
+                py::arg("query"), py::arg("k"), py::arg("ef") = 0)
             .def("size", &Index::size)
             .def("max_level", &Index::max_level);
 
@@ -110,7 +116,8 @@ PYBIND11_MODULE(_nilvec, m) {
     }
   };
 
-  bind_hnsw(std::type_identity<HNSWVanilla<float>>{}, "HNSWVanilla", false);
+  bind_hnsw(std::type_identity<HNSWVanilla<float>>{}, "HNSWVanilla", false,
+            false);
   bind_hnsw(std::type_identity<HNSWCoarseOptimistic<float>>{},
             "HNSWCoarseOptimistic", true);
   bind_hnsw(std::type_identity<HNSWCoarsePessimistic<float>>{},
@@ -123,31 +130,39 @@ PYBIND11_MODULE(_nilvec, m) {
   // --- IVFFlat Indexes ---
   // Helper to bind IVFFlat classes
   auto bind_ivfflat = [&](auto tag, const std::string& name,
-                          bool has_stats = false) {
+                          bool has_stats = false, bool release_gil = true) {
     using Index = typename decltype(tag)::type;
     auto cls =
         py::class_<Index>(m, name.c_str())
             .def(py::init<Dim, size_t, size_t>(), py::arg("dim"),
                  py::arg("nlist") = 100, py::arg("nprobe") = 1)
-            .def(
-                "train",
-                [](Index& self, const std::vector<std::vector<float>>& data) {
-                  self.train(data);
-                },
-                py::call_guard<py::gil_scoped_release>())
-            .def(
-                "insert",
-                [](Index& self, const std::vector<float>& data) {
-                  return self.insert(std::span<const float>(data));
-                },
-                py::call_guard<py::gil_scoped_release>())
-            .def(
-                "search",
-                [](const Index& self, const std::vector<float>& query,
-                   size_t k) {
-                  return self.search(std::span<const float>(query), k);
-                },
-                py::call_guard<py::gil_scoped_release>())
+            .def("train",
+                 [release_gil](Index& self,
+                               const std::vector<std::vector<float>>& data) {
+                   if (release_gil) {
+                     py::gil_scoped_release gil;
+                     self.train(data);
+                   } else {
+                     self.train(data);
+                   }
+                 })
+            .def("insert",
+                 [release_gil](Index& self, const std::vector<float>& data) {
+                   if (release_gil) {
+                     py::gil_scoped_release gil;
+                     return self.insert(std::span<const float>(data));
+                   }
+                   return self.insert(std::span<const float>(data));
+                 })
+            .def("search",
+                 [release_gil](const Index& self,
+                               const std::vector<float>& query, size_t k) {
+                   if (release_gil) {
+                     py::gil_scoped_release gil;
+                     return self.search(std::span<const float>(query), k);
+                   }
+                   return self.search(std::span<const float>(query), k);
+                 })
             .def("size", &Index::size)
             .def("is_trained", &Index::is_trained)
             .def("set_nprobe", &Index::set_nprobe)
@@ -169,7 +184,7 @@ PYBIND11_MODULE(_nilvec, m) {
   };
 
   bind_ivfflat(std::type_identity<IVFFlatVanilla<float>>{}, "IVFFlatVanilla",
-               false);
+               false, false);
   bind_ivfflat(std::type_identity<IVFFlatCoarseOptimistic<float>>{},
                "IVFFlatCoarseOptimistic", true);
   bind_ivfflat(std::type_identity<IVFFlatCoarsePessimistic<float>>{},
@@ -269,27 +284,33 @@ PYBIND11_MODULE(_nilvec, m) {
 
   // Helper to bind SQ8 HNSW classes
   auto bind_hnsw_sq8 = [&](auto tag, const std::string& name,
-                           bool has_stats = false) {
+                           bool has_stats = false, bool release_gil = true) {
     using Index = typename decltype(tag)::type;
     auto cls =
         py::class_<Index>(m, name.c_str())
             .def(py::init<Dim, size_t, size_t, float>(), py::arg("dim"),
                  py::arg("M") = 16, py::arg("ef_construction") = 200,
                  py::arg("mL") = 0.0f)
-            .def(
-                "insert",
-                [](Index& self, const std::vector<int8_t>& data) {
-                  return self.insert(std::span<const int8_t>(data));
-                },
-                py::call_guard<py::gil_scoped_release>())
+            .def("insert",
+                 [release_gil](Index& self, const std::vector<int8_t>& data) {
+                   if (release_gil) {
+                     py::gil_scoped_release gil;
+                     return self.insert(std::span<const int8_t>(data));
+                   }
+                   return self.insert(std::span<const int8_t>(data));
+                 })
             .def(
                 "search",
-                [](const Index& self, const std::vector<int8_t>& query,
-                   size_t k, size_t ef) {
+                [release_gil](const Index& self,
+                              const std::vector<int8_t>& query, size_t k,
+                              size_t ef) {
+                  if (release_gil) {
+                    py::gil_scoped_release gil;
+                    return self.search(std::span<const int8_t>(query), k, ef);
+                  }
                   return self.search(std::span<const int8_t>(query), k, ef);
                 },
-                py::arg("query"), py::arg("k"), py::arg("ef") = 0,
-                py::call_guard<py::gil_scoped_release>())
+                py::arg("query"), py::arg("k"), py::arg("ef") = 0)
             .def("size", &Index::size)
             .def("max_level", &Index::max_level);
 
@@ -308,7 +329,8 @@ PYBIND11_MODULE(_nilvec, m) {
     }
   };
 
-  bind_hnsw_sq8(std::type_identity<HNSWVanilla<int8_t>>{}, "HNSWVanillaSQ8");
+  bind_hnsw_sq8(std::type_identity<HNSWVanilla<int8_t>>{}, "HNSWVanillaSQ8",
+                false, false);
   bind_hnsw_sq8(std::type_identity<HNSWCoarseOptimistic<int8_t>>{},
                 "HNSWCoarseOptimisticSQ8", true);
   bind_hnsw_sq8(std::type_identity<HNSWCoarsePessimistic<int8_t>>{},
@@ -320,31 +342,39 @@ PYBIND11_MODULE(_nilvec, m) {
 
   // Helper to bind SQ8 IVFFlat classes
   auto bind_ivfflat_sq8 = [&](auto tag, const std::string& name,
-                              bool has_stats = false) {
+                              bool has_stats = false, bool release_gil = true) {
     using Index = typename decltype(tag)::type;
     auto cls =
         py::class_<Index>(m, name.c_str())
             .def(py::init<Dim, size_t, size_t>(), py::arg("dim"),
                  py::arg("nlist") = 100, py::arg("nprobe") = 1)
-            .def(
-                "train",
-                [](Index& self, const std::vector<std::vector<int8_t>>& data) {
-                  self.train(data);
-                },
-                py::call_guard<py::gil_scoped_release>())
-            .def(
-                "insert",
-                [](Index& self, const std::vector<int8_t>& data) {
-                  return self.insert(std::span<const int8_t>(data));
-                },
-                py::call_guard<py::gil_scoped_release>())
-            .def(
-                "search",
-                [](const Index& self, const std::vector<int8_t>& query,
-                   size_t k) {
-                  return self.search(std::span<const int8_t>(query), k);
-                },
-                py::call_guard<py::gil_scoped_release>())
+            .def("train",
+                 [release_gil](Index& self,
+                               const std::vector<std::vector<int8_t>>& data) {
+                   if (release_gil) {
+                     py::gil_scoped_release gil;
+                     self.train(data);
+                   } else {
+                     self.train(data);
+                   }
+                 })
+            .def("insert",
+                 [release_gil](Index& self, const std::vector<int8_t>& data) {
+                   if (release_gil) {
+                     py::gil_scoped_release gil;
+                     return self.insert(std::span<const int8_t>(data));
+                   }
+                   return self.insert(std::span<const int8_t>(data));
+                 })
+            .def("search",
+                 [release_gil](const Index& self,
+                               const std::vector<int8_t>& query, size_t k) {
+                   if (release_gil) {
+                     py::gil_scoped_release gil;
+                     return self.search(std::span<const int8_t>(query), k);
+                   }
+                   return self.search(std::span<const int8_t>(query), k);
+                 })
             .def("size", &Index::size)
             .def("is_trained", &Index::is_trained)
             .def("set_nprobe", &Index::set_nprobe)
@@ -366,7 +396,7 @@ PYBIND11_MODULE(_nilvec, m) {
   };
 
   bind_ivfflat_sq8(std::type_identity<IVFFlatVanilla<int8_t>>{},
-                   "IVFFlatVanillaSQ8");
+                   "IVFFlatVanillaSQ8", false, false);
   bind_ivfflat_sq8(std::type_identity<IVFFlatCoarseOptimistic<int8_t>>{},
                    "IVFFlatCoarseOptimisticSQ8", true);
   bind_ivfflat_sq8(std::type_identity<IVFFlatCoarsePessimistic<int8_t>>{},
