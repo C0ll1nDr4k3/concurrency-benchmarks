@@ -88,6 +88,18 @@ class TestFormatThroughputLine:
         assert "2.50s" in line
         assert "Build" in line
 
+    def test_with_build_time_milliseconds(self):
+        line = strip_ansi(
+            format_throughput_line(4, 1, 3, 5000.0, None, build_time=0.0042)
+        )
+        assert "4.20ms" in line
+
+    def test_with_build_time_microseconds(self):
+        line = strip_ansi(
+            format_throughput_line(4, 1, 3, 5000.0, None, build_time=0.0000009)
+        )
+        assert "1us" in line
+
     def test_with_search_latencies(self):
         line = strip_ansi(
             format_throughput_line(

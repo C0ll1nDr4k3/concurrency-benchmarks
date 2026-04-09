@@ -1,6 +1,15 @@
 from colorama import Fore, Style
 
 
+def _format_duration_compact(seconds):
+    """Format elapsed seconds with dynamic units for compact inline output."""
+    if seconds < 0.001:
+        return f"{seconds * 1_000_000:.0f}us"
+    if seconds < 1.0:
+        return f"{seconds * 1000:.2f}ms"
+    return _format_elapsed(seconds)
+
+
 def format_benchmark_header(name):
     if name in {"Redis", "Weaviate", "USearch"} or "FAISS" in name:
         name_color = Fore.MAGENTA
@@ -34,7 +43,7 @@ def format_throughput_line(
     if build_time is not None:
         build_str = (
             f"{Fore.BLUE}Build:{Style.RESET_ALL} "
-            f"{Fore.WHITE}{build_time:.2f}s{Style.RESET_ALL} | "
+            f"{Fore.WHITE}{_format_duration_compact(build_time)}{Style.RESET_ALL} | "
         )
     lat_str = ""
     if search_latencies is not None:
