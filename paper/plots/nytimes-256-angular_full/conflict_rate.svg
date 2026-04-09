@@ -1198,7 +1198,7 @@ L 399.736816 156.345937
      </g>
     </g>
     <g id="text_17">
-     <!-- HNSW Coarse  [W:1%-5%] -->
+     <!-- HNSW Coarse  [W:20%-50%] -->
      <g transform="translate(407.736816 159.845937) scale(0.1 -0.1)">
       <defs>
        <path id="DejaVuSans-48" d="M 628 4666 
@@ -1353,7 +1353,7 @@ L 399.736816 171.024063
      </g>
     </g>
     <g id="text_18">
-     <!-- HNSW Fine  [W:1%-5%] -->
+     <!-- HNSW Fine  [W:20%-50%] -->
      <g transform="translate(407.736816 174.524063) scale(0.1 -0.1)">
       <defs>
        <path id="DejaVuSans-46" d="M 628 4666 
@@ -1402,7 +1402,7 @@ L 399.736816 185.702187
      </g>
     </g>
     <g id="text_19">
-     <!-- IVF Coarse  [W:1%-5%] -->
+     <!-- IVF Coarse  [W:20%-50%] -->
      <g transform="translate(407.736816 189.202187) scale(0.1 -0.1)">
       <defs>
        <path id="DejaVuSans-49" d="M 628 4666 
@@ -1456,7 +1456,7 @@ L 399.736816 200.380313
      </g>
     </g>
     <g id="text_20">
-     <!-- IVF Fine  [W:1%-5%] -->
+     <!-- IVF Fine  [W:20%-50%] -->
      <g transform="translate(407.736816 203.880313) scale(0.1 -0.1)">
       <use xlink:href="#DejaVuSans-49"/>
       <use xlink:href="#DejaVuSans-56" transform="translate(29.492188 0)"/>

@@ -30,7 +30,7 @@ class BenchmarkResultsStore:
                 num_vectors INTEGER,
                 num_queries INTEGER,
                 k INTEGER,
-                op_mix_ratio DOUBLE,
+                workload_profile VARCHAR,
                 thread_counts_json VARCHAR,
                 only_external BOOLEAN,
                 internal_only BOOLEAN,
@@ -78,6 +78,12 @@ class BenchmarkResultsStore:
         try:
             self.conn.execute(
                 "ALTER TABLE benchmark_runs ADD COLUMN internal_only BOOLEAN"
+            )
+        except Exception:
+            pass  # Column already exists
+        try:
+            self.conn.execute(
+                "ALTER TABLE benchmark_runs ADD COLUMN workload_profile VARCHAR"
             )
         except Exception:
             pass  # Column already exists
@@ -140,7 +146,7 @@ class BenchmarkResultsStore:
             """
             INSERT INTO benchmark_runs (
                 run_id, run_tag, dataset_name, dataset_path, dim, num_vectors,
-                num_queries, k, op_mix_ratio, thread_counts_json, only_external,
+                num_queries, k, workload_profile, thread_counts_json, only_external,
                 internal_only, skip_recall, skip_throughput, limit_rows
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -154,7 +160,7 @@ class BenchmarkResultsStore:
                 run_meta["num_vectors"],
                 run_meta["num_queries"],
                 run_meta["k"],
-                run_meta["op_mix_ratio"],
+                run_meta["workload_profile"],
                 json.dumps(run_meta["thread_counts"]),
                 run_meta["only_external"],
                 run_meta["internal_only"],
@@ -256,7 +262,7 @@ class BenchmarkResultsStore:
         return (
             """
             dataset_name = ? AND dim = ? AND num_vectors = ? AND num_queries = ?
-            AND k = ? AND op_mix_ratio = ? AND thread_counts_json = ?
+            AND k = ? AND workload_profile = ? AND thread_counts_json = ?
         """,
             [
                 meta["dataset_name"],
@@ -264,7 +270,7 @@ class BenchmarkResultsStore:
                 meta["num_vectors"],
                 meta["num_queries"],
                 meta["k"],
-                meta["op_mix_ratio"],
+                meta["workload_profile"],
                 json.dumps(meta["thread_counts"]),
             ],
         )

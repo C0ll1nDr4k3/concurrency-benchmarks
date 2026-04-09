@@ -1,7 +1,5 @@
 import argparse
 
-from nilvec.config import OP_MIX_RATIO
-
 
 def build_parser():
     parser = argparse.ArgumentParser()
@@ -19,23 +17,6 @@ def build_parser():
         "--all",
         action="store_true",
         help="Run benchmark on all available datasets (overrides --dataset)",
-    )
-    parser.add_argument(
-        "--op-mix-ratio",
-        dest="op_mix_ratio",
-        type=float,
-        default=OP_MIX_RATIO,
-        help="Fixed op-mix write ratio (0.0=Read, 1.0=Write). Overridden by --op-mix-bands.",
-    )
-    parser.add_argument(
-        "--op-mix-bands",
-        dest="op_mix_bands",
-        nargs="+",
-        type=str,
-        default=["0.01-0.05", "0.20-0.50"],
-        help="Op-mix write-ratio bands (default: '0.01-0.05 0.20-0.50'). "
-        "Ratio ramps linearly from low to high across thread counts. "
-        "Multiple bands run separate sweeps, e.g. '0.01-0.05 0.20-0.50'.",
     )
     parser.add_argument(
         "--limit",

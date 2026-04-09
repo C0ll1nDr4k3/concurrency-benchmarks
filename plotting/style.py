@@ -43,11 +43,6 @@ GRANULARITY_MARKER_MAPPING = {
 }
 
 
-def format_op_mix_band_label(band):
-    """Format an op-mix band tuple as a compact label like 'W:1%-5%'."""
-    return f"W:{band[0] * 100:.0f}%-{band[1] * 100:.0f}%"
-
-
 def _normalize_index_name(name):
     normalized = str(name)
     for suffix in (" (history)",):

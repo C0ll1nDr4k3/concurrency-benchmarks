@@ -3,7 +3,6 @@
 import pytest
 
 from nilvec.cli import build_parser
-from nilvec.config import OP_MIX_RATIO
 
 
 @pytest.fixture()
@@ -15,14 +14,6 @@ class TestDefaults:
     def test_dataset_default(self, parser):
         args = parser.parse_args([])
         assert args.dataset == "sift-128-euclidean.hdf5"
-
-    def test_op_mix_ratio_default(self, parser):
-        args = parser.parse_args([])
-        assert args.op_mix_ratio == pytest.approx(OP_MIX_RATIO)
-
-    def test_op_mix_bands_default(self, parser):
-        args = parser.parse_args([])
-        assert args.op_mix_bands == ["0.01-0.05", "0.20-0.50"]
 
     def test_limit_default(self, parser):
         args = parser.parse_args([])
@@ -104,18 +95,6 @@ class TestValueArgs:
         args = parser.parse_args(["--limit", "5000"])
         assert args.limit == 5000
 
-    def test_op_mix_ratio_custom(self, parser):
-        args = parser.parse_args(["--op-mix-ratio", "0.3"])
-        assert args.op_mix_ratio == pytest.approx(0.3)
-
-    def test_op_mix_bands_custom_single(self, parser):
-        args = parser.parse_args(["--op-mix-bands", "0.05-0.15"])
-        assert args.op_mix_bands == ["0.05-0.15"]
-
-    def test_op_mix_bands_custom_multiple(self, parser):
-        args = parser.parse_args(["--op-mix-bands", "0.01-0.05", "0.10-0.30"])
-        assert args.op_mix_bands == ["0.01-0.05", "0.10-0.30"]
-
     def test_results_db_custom(self, parser):
         args = parser.parse_args(["--results-db", "my_results.duckdb"])
         assert args.results_db == "my_results.duckdb"
@@ -138,4 +117,12 @@ class TestValueArgs:
 
     def test_rw_bands_flag_removed(self, parser):
         with pytest.raises(SystemExit):
-            parser.parse_args(["--rw-bands", "0.01-0.05"])
+            parser.parse_args(["--rw-bands", "0.20-0.50"])
+
+    def test_op_mix_ratio_flag_removed(self, parser):
+        with pytest.raises(SystemExit):
+            parser.parse_args(["--op-mix-ratio", "0.3"])
+
+    def test_op_mix_bands_flag_removed(self, parser):
+        with pytest.raises(SystemExit):
+            parser.parse_args(["--op-mix-bands", "0.20-0.50"])

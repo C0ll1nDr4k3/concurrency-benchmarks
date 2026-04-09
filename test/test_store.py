@@ -27,7 +27,7 @@ def _run_meta(**overrides):
         "num_vectors": 1000,
         "num_queries": 100,
         "k": 10,
-        "op_mix_ratio": 0.1,
+        "workload_profile": "thread_split_quarter_writers",
         "thread_counts": [2, 4, 8],
         "only_external": False,
         "internal_only": False,

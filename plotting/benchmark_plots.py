@@ -8,7 +8,6 @@ from .style import (
     COLOR_MAPPING,
     DPI,
     add_semantic_style_legend,
-    format_op_mix_band_label,
     get_plot_style,
     load_icons,
 )
@@ -176,39 +175,6 @@ def plot_conflict_rate(
     plt.ylabel("Conflict Rate (%)")
     plt.title("Conflict Rate (Optimistic)")
     ax.legend(loc="best")
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=dpi)
-    plt.close()
-
-
-def plot_op_mix_schedule(
-    op_mix_bands,
-    op_mix_schedules,
-    thread_counts,
-    *,
-    output_path,
-    dpi=DPI,
-):
-    """Plot the op-mix write-ratio schedule across thread counts."""
-    plt.figure(figsize=(8, 4))
-    for sched_idx, schedule in enumerate(op_mix_schedules):
-        band = op_mix_bands[sched_idx]
-        label = format_op_mix_band_label(band)
-        plt.plot(thread_counts, [r * 100 for r in schedule], "o-", label=label)
-        for x, y in zip(thread_counts, schedule):
-            plt.annotate(
-                f"{y * 100:.1f}%",
-                (x, y * 100),
-                textcoords="offset points",
-                xytext=(0, 8),
-                ha="center",
-                fontsize=8,
-            )
-    plt.xlabel("Threads")
-    plt.ylabel("Op-Mix Write Ratio (%)")
-    plt.title("Op-Mix Schedule")
-    plt.legend()
     plt.grid(True)
     plt.tight_layout()
     plt.savefig(output_path, dpi=dpi)

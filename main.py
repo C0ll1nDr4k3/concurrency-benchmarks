@@ -39,16 +39,15 @@ from nilvec.external_indexes import (
     usearch,
     weaviate,
 )
-from nilvec.formatting import _format_elapsed, make_op_mix_schedule, parse_op_mix_bands
+from nilvec.formatting import _format_elapsed
 from nilvec.metrics import get_ground_truth, redis_benchmark_ready
 from nilvec.store import BenchmarkResultsStore
 from plotting.benchmark_plots import (
     plot_conflict_rate,
-    plot_op_mix_schedule,
     plot_recall_vs_qps,
     plot_throughput,
 )
-from plotting.style import DPI, format_op_mix_band_label, get_plot_style_token
+from plotting.style import DPI, get_plot_style_token
 
 
 def _run_single_dataset(args, dataset_path):
@@ -94,8 +93,7 @@ def _run_single_dataset(args, dataset_path):
         "num_vectors": cfg.NUM_VECTORS,
         "num_queries": cfg.NUM_QUERIES,
         "k": cfg.K,
-        "op_mix_ratio": args.op_mix_ratio,
-        "op_mix_bands": args._op_mix_bands,
+        "workload_profile": "thread_split_quarter_writers",
         "thread_counts": cfg.THREAD_COUNTS,
         "only_external": args.external_only,
         "internal_only": args.internal_only,
@@ -119,9 +117,6 @@ def _run_single_dataset(args, dataset_path):
         "throughput": {},
         "conflicts": {},
         "thread_counts": cfg.THREAD_COUNTS,
-        "op_mix_ratio": args.op_mix_ratio,
-        "op_mix_bands": args._op_mix_bands,
-        "op_mix_schedules": args._op_mix_schedules,
         "external_names": [],
     }
 
@@ -232,17 +227,6 @@ def _run_single_dataset(args, dataset_path):
         )
         print(f"Saved {recall_path}")
 
-    # --- Op-mix schedule plot ---
-    if not args.skip_throughput and args._op_mix_bands:
-        schedule_path = os.path.join(plot_dir, "op_mix_schedule.svg")
-        plot_op_mix_schedule(
-            args._op_mix_bands,
-            args._op_mix_schedules,
-            cfg.THREAD_COUNTS,
-            output_path=schedule_path,
-        )
-        print(f"Saved {schedule_path}")
-
     # --- Throughput vs Threads ---
     if not args.skip_throughput:
         print("\n=== Throughput vs Threads Benchmark ===")
@@ -287,68 +271,49 @@ def _run_single_dataset(args, dataset_path):
                 "  (pass --auto-start-redis=false to disable Docker auto-start)"
             )
 
-        multi_band = args._op_mix_bands is not None and len(args._op_mix_schedules) > 1
-
-        for sched_idx, op_mix_schedule in enumerate(args._op_mix_schedules):
-            band = args._op_mix_bands[sched_idx] if args._op_mix_bands else None
-            band_suffix = (
-                f" [{format_op_mix_band_label(band)}]" if multi_band and band else ""
-            )
-
-            if multi_band:
-                print(
-                    f"\n{Fore.CYAN}--- Band {sched_idx + 1}: "
-                    f"{format_op_mix_band_label(band)} ---{Style.RESET_ALL}"
+        for cls, name, iargs in externals:
+            if args.internal_only:
+                continue
+            try:
+                res, conflicts, build, lats = benchmark_throughput_vs_threads(
+                    cls,
+                    name,
+                    data,
+                    queries,
+                    cfg.K,
+                    iargs,
+                    latency_sample_rate=args.latency_sample_rate,
                 )
-
-            def _result_key(name):
-                return f"{name}{band_suffix}"
-
-            for cls, name, iargs in externals:
-                if args.internal_only:
+                if res is None:
                     continue
-                try:
-                    res, conflicts, build, lats = benchmark_throughput_vs_threads(
-                        cls,
-                        name,
-                        data,
-                        queries,
-                        cfg.K,
-                        iargs,
-                        op_mix_ratio=op_mix_schedule,
-                        latency_sample_rate=args.latency_sample_rate,
-                    )
-                    if res is None:
-                        continue
-                    throughput_results[_result_key(name)] = res
-                    conflict_results[_result_key(name)] = conflicts
-                    build_time_results[_result_key(name)] = build
-                    latency_results[_result_key(name)] = lats
-                except Exception as e:
-                    print(f"Skipping {name}: {e}")
+                throughput_results[name] = res
+                conflict_results[name] = conflicts
+                build_time_results[name] = build
+                latency_results[name] = lats
+            except Exception as e:
+                print(f"Skipping {name}: {e}")
 
-            for cls, name, iargs in indexes:
-                if args.external_only:
+        for cls, name, iargs in indexes:
+            if args.external_only:
+                continue
+            try:
+                res, conflicts, build, lats = benchmark_throughput_vs_threads(
+                    cls,
+                    name,
+                    data,
+                    queries,
+                    cfg.K,
+                    iargs,
+                    latency_sample_rate=args.latency_sample_rate,
+                )
+                if res is None:
                     continue
-                try:
-                    res, conflicts, build, lats = benchmark_throughput_vs_threads(
-                        cls,
-                        name,
-                        data,
-                        queries,
-                        cfg.K,
-                        iargs,
-                        op_mix_ratio=op_mix_schedule,
-                        latency_sample_rate=args.latency_sample_rate,
-                    )
-                    if res is None:
-                        continue
-                    throughput_results[_result_key(name)] = res
-                    conflict_results[_result_key(name)] = conflicts
-                    build_time_results[_result_key(name)] = build
-                    latency_results[_result_key(name)] = lats
-                except Exception as e:
-                    print(f"Skipping {name}: {e}")
+                throughput_results[name] = res
+                conflict_results[name] = conflicts
+                build_time_results[name] = build
+                latency_results[name] = lats
+            except Exception as e:
+                print(f"Skipping {name}: {e}")
 
         results_cache["throughput"] = throughput_results
         results_cache["conflicts"] = conflict_results
@@ -374,13 +339,7 @@ def _run_single_dataset(args, dataset_path):
                     f"Cross-pollinated throughput from history: {', '.join(injected)}"
                 )
 
-        if args._op_mix_bands:
-            band_labels = ", ".join(
-                format_op_mix_band_label(b) for b in args._op_mix_bands
-            )
-            title = f"Throughput ({band_labels})"
-        else:
-            title = f"Throughput (W:{args.op_mix_ratio:.1f}, R:{1.0 - args.op_mix_ratio:.1f})"
+        title = "Throughput"
 
         throughput_path = os.path.join(plot_dir, "throughput_scaling.svg")
         plot_throughput(
@@ -434,15 +393,6 @@ def run_benchmark(args=None):
     if args is None:
         parser = build_parser()
         args = parser.parse_args()
-
-    if getattr(args, "op_mix_bands", None):
-        args._op_mix_bands = parse_op_mix_bands(args.op_mix_bands)
-        args._op_mix_schedules = [
-            make_op_mix_schedule(b, cfg.THREAD_COUNTS) for b in args._op_mix_bands
-        ]
-    else:
-        args._op_mix_bands = [(args.op_mix_ratio, args.op_mix_ratio)]
-        args._op_mix_schedules = [[args.op_mix_ratio] * len(cfg.THREAD_COUNTS)]
 
     suite_start_time = time.time()
 
