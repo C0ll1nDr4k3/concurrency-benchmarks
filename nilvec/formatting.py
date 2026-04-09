@@ -1,9 +1,9 @@
 from colorama import Fore, Style
 
-from plotting.style import format_band_label
+from plotting.style import format_op_mix_band_label
 
 
-def parse_rw_bands(band_strs):
+def parse_op_mix_bands(band_strs):
     """Parse band strings like '0.01-0.05' into (low, high) tuples."""
     bands = []
     for s in band_strs:
@@ -19,7 +19,7 @@ def parse_rw_bands(band_strs):
     return bands
 
 
-def make_rw_schedule(band, thread_counts):
+def make_op_mix_schedule(band, thread_counts):
     """Linearly interpolate write ratio from band[0] to band[1] across thread counts."""
     low, high = band
     n = len(thread_counts)
@@ -28,15 +28,15 @@ def make_rw_schedule(band, thread_counts):
     return [low + (high - low) * i / (n - 1) for i in range(n)]
 
 
-def format_benchmark_header(name, rw_ratio):
+def format_benchmark_header(name, op_mix_ratio):
     if name in {"Redis", "Weaviate", "USearch"} or "FAISS" in name:
         name_color = Fore.MAGENTA
     else:
         name_color = Fore.CYAN
-    if isinstance(rw_ratio, tuple):
-        ratio_label = format_band_label(rw_ratio)
+    if isinstance(op_mix_ratio, tuple):
+        ratio_label = format_op_mix_band_label(op_mix_ratio)
     else:
-        ratio_label = f"W/R={rw_ratio}"
+        ratio_label = f"OpMixW={op_mix_ratio}"
     return (
         f"\n{Style.BRIGHT}{Fore.CYAN}Benchmarking Throughput{Style.RESET_ALL} "
         f"{Fore.WHITE}({ratio_label}){Style.RESET_ALL}: "
@@ -53,6 +53,8 @@ def format_throughput_line(
     build_time=None,
     search_latencies=None,
     insert_latencies=None,
+    target_write_ratio=None,
+    achieved_write_ratio=None,
 ):
     if prev is None:
         throughput_color = Fore.CYAN
@@ -81,6 +83,12 @@ def format_throughput_line(
             f" | {Fore.BLUE}W p50/p99:{Style.RESET_ALL} "
             f"{Fore.GREEN}{i_p50:.1f}/{i_p99:.1f}ms{Style.RESET_ALL}"
         )
+    ratio_str = ""
+    if target_write_ratio is not None and achieved_write_ratio is not None:
+        ratio_str = (
+            f" | {Fore.BLUE}W tgt/ach:{Style.RESET_ALL} "
+            f"{Fore.GREEN}{target_write_ratio * 100:.1f}%/{achieved_write_ratio * 100:.1f}%{Style.RESET_ALL}"
+        )
     return (
         f"  {Fore.BLUE}Threads:{Style.RESET_ALL} {num_threads} "
         f"{Fore.WHITE}(W={num_insert_threads}, R={num_search_threads}){Style.RESET_ALL} -> "
@@ -88,6 +96,7 @@ def format_throughput_line(
         f"{Fore.BLUE}Throughput:{Style.RESET_ALL} "
         f"{Style.BRIGHT}{throughput_color}{throughput:.0f}{Style.RESET_ALL} ops/s"
         f"{lat_str}"
+        f"{ratio_str}"
     )
 
 

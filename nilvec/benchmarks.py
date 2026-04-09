@@ -117,34 +117,32 @@ def benchmark_throughput_vs_threads(
     queries,
     k,
     index_args=None,
-    rw_ratio=0.5,
-    preload_ratio=0.5,
+    op_mix_ratio=0.5,
     latency_sample_rate=0.0,
 ):
     """
     Run Throughput vs Threads benchmark with configurable R/W split.
-    rw_ratio: float for a fixed ratio, or list of floats (one per THREAD_COUNTS entry)
+    op_mix_ratio: float for a fixed ratio, or list of floats (one per THREAD_COUNTS entry)
               for a ramping schedule across thread counts.
-    preload_ratio: fraction of dataset to pre-load during construction (default: 0.8).
     """
     if index_args is None:
         index_args = []
 
-    # Normalize rw_ratio into a per-thread-count schedule
-    if isinstance(rw_ratio, (list, tuple)) and not isinstance(
-        rw_ratio[0], (int, float)
+    # Normalize op_mix_ratio into a per-thread-count schedule
+    if isinstance(op_mix_ratio, (list, tuple)) and not isinstance(
+        op_mix_ratio[0], (int, float)
     ):
-        rw_schedule = rw_ratio
-    elif isinstance(rw_ratio, list):
-        rw_schedule = rw_ratio
+        op_mix_schedule = op_mix_ratio
+    elif isinstance(op_mix_ratio, list):
+        op_mix_schedule = op_mix_ratio
     else:
-        rw_schedule = [rw_ratio] * len(config.THREAD_COUNTS)
+        op_mix_schedule = [op_mix_ratio] * len(config.THREAD_COUNTS)
 
     # Display header with band info if schedule varies
-    if rw_schedule[0] != rw_schedule[-1]:
-        header_ratio = (rw_schedule[0], rw_schedule[-1])
+    if op_mix_schedule[0] != op_mix_schedule[-1]:
+        header_ratio = (op_mix_schedule[0], op_mix_schedule[-1])
     else:
-        header_ratio = rw_schedule[0]
+        header_ratio = op_mix_schedule[0]
     print(format_benchmark_header(index_name, header_ratio))
     index_start_time = time.time()
     results = []
@@ -176,104 +174,77 @@ def benchmark_throughput_vs_threads(
         if hasattr(index, "set_num_threads"):
             index.set_num_threads(num_threads)
 
-        initial_size = int(len(data) * preload_ratio)
-        for i in range(initial_size):
-            index.insert(data[i])
         build_time = time.time() - build_start
         build_times.append(build_time)
-
-        remaining_data = data[initial_size:]
-
-        ops_count = 0
         start_time = time.time()
 
         threads = []
+        op_counts = [(0, 0) for _ in range(num_threads)]  # (reads, writes)
+        search_lat_lists = [[] for _ in range(num_threads)]
+        insert_lat_lists = [[] for _ in range(num_threads)]
+        insert_pos = [0]
+        insert_lock = threading.Lock()
+        ops_per_thread = max(1, len(queries) * 5)
 
-        def search_worker(qs, latency_list):
-            nonlocal ops_count
-            local_ops = 0
+        def mixed_worker(worker_id):
+            local_reads = 0
+            local_writes = 0
+            read_lats = search_lat_lists[worker_id]
+            write_lats = insert_lat_lists[worker_id]
+            write_ratio = max(0.0, min(1.0, float(op_mix_schedule[tc_idx])))
+            seed = ((tc_idx + 1) * 1_000_003) ^ ((worker_id + 1) * 65_537)
+            rng = random.Random(seed)
             ops_until_next = (
-                random.randint(0, sample_interval - 1) if sample_interval > 0 else -1
+                rng.randint(0, sample_interval - 1) if sample_interval > 0 else -1
             )
-            for _ in range(5):
+            query_pos = rng.randrange(len(queries)) if queries else 0
+
+            for _ in range(ops_per_thread):
                 if stop_event.is_set():
                     break
-                for q in qs:
-                    if stop_event.is_set():
-                        break
+                do_write = rng.random() < write_ratio
+
+                if do_write and data:
+                    with insert_lock:
+                        if insert_pos[0] < len(data):
+                            vec = data[insert_pos[0]]
+                            insert_pos[0] += 1
+                        else:
+                            vec = None
+                    if vec is not None:
+                        if ops_until_next == 0:
+                            t0 = time.perf_counter()
+                            index.insert(vec)
+                            write_lats.append((time.perf_counter() - t0) * 1000)
+                            ops_until_next = sample_interval - 1
+                        else:
+                            index.insert(vec)
+                            if ops_until_next > 0:
+                                ops_until_next -= 1
+                        local_writes += 1
+                        continue
+
+                if queries:
+                    q = queries[query_pos]
+                    query_pos = (query_pos + 1) % len(queries)
                     if ops_until_next == 0:
                         t0 = time.perf_counter()
                         index.search(q, k)
-                        latency_list.append((time.perf_counter() - t0) * 1000)
+                        read_lats.append((time.perf_counter() - t0) * 1000)
                         ops_until_next = sample_interval - 1
                     else:
                         index.search(q, k)
                         if ops_until_next > 0:
                             ops_until_next -= 1
-                    local_ops += 1
-            return local_ops
+                    local_reads += 1
 
-        def insert_worker(vecs, latency_list):
-            nonlocal ops_count
-            local_ops = 0
-            ops_until_next = (
-                random.randint(0, sample_interval - 1) if sample_interval > 0 else -1
-            )
-            for v in vecs:
-                if stop_event.is_set():
-                    break
-                if ops_until_next == 0:
-                    t0 = time.perf_counter()
-                    index.insert(v)
-                    latency_list.append((time.perf_counter() - t0) * 1000)
-                    ops_until_next = sample_interval - 1
-                else:
-                    index.insert(v)
-                    if ops_until_next > 0:
-                        ops_until_next -= 1
-                local_ops += 1
-            return local_ops
+            op_counts[worker_id] = (local_reads, local_writes)
 
-        step_ratio = rw_schedule[tc_idx]
-        num_insert_threads = int(num_threads * step_ratio)
-        if step_ratio > 0.0 and step_ratio < 1.0:
-            if num_insert_threads == 0 and num_threads > 0:
-                num_insert_threads = 1
-            elif num_insert_threads == num_threads and num_threads > 1:
-                num_insert_threads -= 1
-        elif step_ratio == 0.0:
-            num_insert_threads = 0
-        elif step_ratio == 1.0:
-            num_insert_threads = num_threads
-
-        num_search_threads = num_threads - num_insert_threads
-
-        search_lat_lists = [[] for _ in range(num_search_threads)]
-        insert_lat_lists = [[] for _ in range(num_insert_threads)]
-
-        if num_insert_threads > 0:
-            chunk_s = len(remaining_data) // num_insert_threads
-            for i in range(num_insert_threads):
-                start = i * chunk_s
-                end = (
-                    (i + 1) * chunk_s
-                    if i < num_insert_threads - 1
-                    else len(remaining_data)
-                )
-                t = threading.Thread(
-                    target=insert_worker,
-                    args=(remaining_data[start:end], insert_lat_lists[i]),
-                )
-                threads.append(t)
-                t.start()
-
-        if num_search_threads > 0:
-            for i in range(num_search_threads):
-                t = threading.Thread(
-                    target=search_worker, args=(queries, search_lat_lists[i])
-                )
-                threads.append(t)
-                t.start()
+        step_ratio = op_mix_schedule[tc_idx]
+        for i in range(num_threads):
+            t = threading.Thread(target=mixed_worker, args=(i,))
+            threads.append(t)
+            t.start()
 
         try:
             for t in threads:
@@ -307,16 +278,15 @@ def benchmark_throughput_vs_threads(
         i_p50, i_p95, i_p99 = _pcts(all_insert_lat)
         latency_data.append((s_p50, s_p95, s_p99, i_p50, i_p95, i_p99))
 
-        total_inserts = 0
-        if num_insert_threads > 0:
-            total_inserts = len(remaining_data)
-
-        total_searches = 0
-        if num_search_threads > 0:
-            total_searches = num_search_threads * len(queries) * 5
+        total_searches = sum(r for r, _ in op_counts)
+        total_inserts = sum(w for _, w in op_counts)
 
         total_ops = total_inserts + total_searches
         throughput = total_ops / duration
+        achieved_write_ratio = (total_inserts / total_ops) if total_ops > 0 else 0.0
+        num_insert_threads = int(round(num_threads * achieved_write_ratio))
+        num_insert_threads = max(0, min(num_threads, num_insert_threads))
+        num_search_threads = num_threads - num_insert_threads
         prev = results[-1] if results else None
         print(
             format_throughput_line(
@@ -328,6 +298,8 @@ def benchmark_throughput_vs_threads(
                 build_time,
                 search_latencies=(s_p50, s_p95, s_p99) if s_p50 is not None else None,
                 insert_latencies=(i_p50, i_p95, i_p99) if i_p50 is not None else None,
+                target_write_ratio=step_ratio,
+                achieved_write_ratio=achieved_write_ratio,
             )
         )
         results.append(throughput)

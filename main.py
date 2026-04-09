@@ -39,16 +39,16 @@ from nilvec.external_indexes import (
     usearch,
     weaviate,
 )
-from nilvec.formatting import _format_elapsed, make_rw_schedule, parse_rw_bands
+from nilvec.formatting import _format_elapsed, make_op_mix_schedule, parse_op_mix_bands
 from nilvec.metrics import get_ground_truth, redis_benchmark_ready
 from nilvec.store import BenchmarkResultsStore
 from plotting.benchmark_plots import (
     plot_conflict_rate,
+    plot_op_mix_schedule,
     plot_recall_vs_qps,
-    plot_rw_schedule,
     plot_throughput,
 )
-from plotting.style import DPI, format_band_label, get_plot_style_token
+from plotting.style import DPI, format_op_mix_band_label, get_plot_style_token
 
 
 def _run_single_dataset(args, dataset_path):
@@ -94,8 +94,8 @@ def _run_single_dataset(args, dataset_path):
         "num_vectors": cfg.NUM_VECTORS,
         "num_queries": cfg.NUM_QUERIES,
         "k": cfg.K,
-        "rw_ratio": args.rw_ratio,
-        "rw_bands": args._rw_bands,
+        "op_mix_ratio": args.op_mix_ratio,
+        "op_mix_bands": args._op_mix_bands,
         "thread_counts": cfg.THREAD_COUNTS,
         "only_external": args.external_only,
         "internal_only": args.internal_only,
@@ -119,9 +119,9 @@ def _run_single_dataset(args, dataset_path):
         "throughput": {},
         "conflicts": {},
         "thread_counts": cfg.THREAD_COUNTS,
-        "rw_ratio": args.rw_ratio,
-        "rw_bands": args._rw_bands,
-        "rw_schedules": args._rw_schedules,
+        "op_mix_ratio": args.op_mix_ratio,
+        "op_mix_bands": args._op_mix_bands,
+        "op_mix_schedules": args._op_mix_schedules,
         "external_names": [],
     }
 
@@ -232,12 +232,12 @@ def _run_single_dataset(args, dataset_path):
         )
         print(f"Saved {recall_path}")
 
-    # --- Write-ratio schedule plot ---
-    if not args.skip_throughput and args._rw_bands:
-        schedule_path = os.path.join(plot_dir, "rw_schedule.svg")
-        plot_rw_schedule(
-            args._rw_bands,
-            args._rw_schedules,
+    # --- Op-mix schedule plot ---
+    if not args.skip_throughput and args._op_mix_bands:
+        schedule_path = os.path.join(plot_dir, "op_mix_schedule.svg")
+        plot_op_mix_schedule(
+            args._op_mix_bands,
+            args._op_mix_schedules,
             cfg.THREAD_COUNTS,
             output_path=schedule_path,
         )
@@ -287,16 +287,18 @@ def _run_single_dataset(args, dataset_path):
                 "  (pass --auto-start-redis=false to disable Docker auto-start)"
             )
 
-        multi_band = args._rw_bands is not None and len(args._rw_schedules) > 1
+        multi_band = args._op_mix_bands is not None and len(args._op_mix_schedules) > 1
 
-        for sched_idx, rw_schedule in enumerate(args._rw_schedules):
-            band = args._rw_bands[sched_idx] if args._rw_bands else None
-            band_suffix = f" [{format_band_label(band)}]" if multi_band and band else ""
+        for sched_idx, op_mix_schedule in enumerate(args._op_mix_schedules):
+            band = args._op_mix_bands[sched_idx] if args._op_mix_bands else None
+            band_suffix = (
+                f" [{format_op_mix_band_label(band)}]" if multi_band and band else ""
+            )
 
             if multi_band:
                 print(
                     f"\n{Fore.CYAN}--- Band {sched_idx + 1}: "
-                    f"{format_band_label(band)} ---{Style.RESET_ALL}"
+                    f"{format_op_mix_band_label(band)} ---{Style.RESET_ALL}"
                 )
 
             def _result_key(name):
@@ -313,8 +315,7 @@ def _run_single_dataset(args, dataset_path):
                         queries,
                         cfg.K,
                         iargs,
-                        rw_ratio=rw_schedule,
-                        preload_ratio=args.preload_ratio,
+                        op_mix_ratio=op_mix_schedule,
                         latency_sample_rate=args.latency_sample_rate,
                     )
                     if res is None:
@@ -337,8 +338,7 @@ def _run_single_dataset(args, dataset_path):
                         queries,
                         cfg.K,
                         iargs,
-                        rw_ratio=rw_schedule,
-                        preload_ratio=args.preload_ratio,
+                        op_mix_ratio=op_mix_schedule,
                         latency_sample_rate=args.latency_sample_rate,
                     )
                     if res is None:
@@ -374,11 +374,13 @@ def _run_single_dataset(args, dataset_path):
                     f"Cross-pollinated throughput from history: {', '.join(injected)}"
                 )
 
-        if args._rw_bands:
-            band_labels = ", ".join(format_band_label(b) for b in args._rw_bands)
+        if args._op_mix_bands:
+            band_labels = ", ".join(
+                format_op_mix_band_label(b) for b in args._op_mix_bands
+            )
             title = f"Throughput ({band_labels})"
         else:
-            title = f"Throughput (W:{args.rw_ratio:.1f}, R:{1.0 - args.rw_ratio:.1f})"
+            title = f"Throughput (W:{args.op_mix_ratio:.1f}, R:{1.0 - args.op_mix_ratio:.1f})"
 
         throughput_path = os.path.join(plot_dir, "throughput_scaling.svg")
         plot_throughput(
@@ -433,14 +435,14 @@ def run_benchmark(args=None):
         parser = build_parser()
         args = parser.parse_args()
 
-    if getattr(args, "rw_bands", None):
-        args._rw_bands = parse_rw_bands(args.rw_bands)
-        args._rw_schedules = [
-            make_rw_schedule(b, cfg.THREAD_COUNTS) for b in args._rw_bands
+    if getattr(args, "op_mix_bands", None):
+        args._op_mix_bands = parse_op_mix_bands(args.op_mix_bands)
+        args._op_mix_schedules = [
+            make_op_mix_schedule(b, cfg.THREAD_COUNTS) for b in args._op_mix_bands
         ]
     else:
-        args._rw_bands = [(args.rw_ratio, args.rw_ratio)]
-        args._rw_schedules = [[args.rw_ratio] * len(cfg.THREAD_COUNTS)]
+        args._op_mix_bands = [(args.op_mix_ratio, args.op_mix_ratio)]
+        args._op_mix_schedules = [[args.op_mix_ratio] * len(cfg.THREAD_COUNTS)]
 
     suite_start_time = time.time()
 

@@ -21,7 +21,6 @@ uv run main.py [options]
 | `--dataset PATH`          | `sift-128-euclidean.hdf5`  | HDF5 dataset to benchmark                                    |
 | `--all`                   | off                        | Run all datasets (overrides `--dataset`)                     |
 | `--limit N`               | 0 (no limit)               | Cap vector count                                             |
-| `--preload-ratio F`       | 0.5                        | Fraction of dataset pre-loaded before concurrent phase       |
 | `--rw-ratio F`            | —                          | Fixed write ratio (0.0=read-only, 1.0=write-only)            |
 | `--rw-bands LOW-HIGH ...` | `0.01-0.05 0.20-0.50`      | Write-ratio bands; each runs a separate sweep                |
 | `--skip-recall`           | off                        | Skip recall measurement                                      |

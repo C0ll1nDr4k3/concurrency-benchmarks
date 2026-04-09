@@ -1,6 +1,6 @@
 import argparse
 
-from nilvec.config import RW_RATIO
+from nilvec.config import OP_MIX_RATIO
 
 
 def build_parser():
@@ -21,17 +21,19 @@ def build_parser():
         help="Run benchmark on all available datasets (overrides --dataset)",
     )
     parser.add_argument(
-        "--rw-ratio",
+        "--op-mix-ratio",
+        dest="op_mix_ratio",
         type=float,
-        default=RW_RATIO,
-        help="Fixed write ratio (0.0=Read, 1.0=Write). Overridden by --rw-bands.",
+        default=OP_MIX_RATIO,
+        help="Fixed op-mix write ratio (0.0=Read, 1.0=Write). Overridden by --op-mix-bands.",
     )
     parser.add_argument(
-        "--rw-bands",
+        "--op-mix-bands",
+        dest="op_mix_bands",
         nargs="+",
         type=str,
         default=["0.01-0.05", "0.20-0.50"],
-        help="Write-ratio bands (default: '0.01-0.05 0.20-0.50'). "
+        help="Op-mix write-ratio bands (default: '0.01-0.05 0.20-0.50'). "
         "Ratio ramps linearly from low to high across thread counts. "
         "Multiple bands run separate sweeps, e.g. '0.01-0.05 0.20-0.50'.",
     )
@@ -76,12 +78,6 @@ def build_parser():
         action="store_true",
         default=True,
         help="Attempt to auto-start redis/redis-stack via Docker if REDIS_URL is unreachable (default: enabled)",
-    )
-    parser.add_argument(
-        "--preload-ratio",
-        type=float,
-        default=0.5,
-        help="Fraction of dataset to pre-load during construction (default: 0.5)",
     )
     parser.add_argument(
         "--latency-sample-rate",

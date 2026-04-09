@@ -43,8 +43,8 @@ GRANULARITY_MARKER_MAPPING = {
 }
 
 
-def format_band_label(band):
-    """Format a band tuple as a compact label like 'W:1%-5%'."""
+def format_op_mix_band_label(band):
+    """Format an op-mix band tuple as a compact label like 'W:1%-5%'."""
     return f"W:{band[0] * 100:.0f}%-{band[1] * 100:.0f}%"
 
 

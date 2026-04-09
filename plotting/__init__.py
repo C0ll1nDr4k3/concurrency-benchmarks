@@ -1,7 +1,7 @@
 from .benchmark_plots import (
     plot_conflict_rate,
+    plot_op_mix_schedule,
     plot_recall_vs_qps,
-    plot_rw_schedule,
     plot_throughput,
 )
 from .hnsw_viz import generate_hnsw_viz
@@ -13,7 +13,7 @@ from .style import (
     STRATEGY_COLOR_MAPPING,
     TYPE_LINESTYLE_MAPPING,
     add_semantic_style_legend,
-    format_band_label,
+    format_op_mix_band_label,
     get_plot_style,
     get_plot_style_token,
     load_icons,

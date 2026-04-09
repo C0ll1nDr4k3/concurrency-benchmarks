@@ -8,8 +8,8 @@ from nilvec.formatting import (
     _format_elapsed,
     format_benchmark_header,
     format_throughput_line,
-    make_rw_schedule,
-    parse_rw_bands,
+    make_op_mix_schedule,
+    parse_op_mix_bands,
 )
 
 
@@ -19,75 +19,75 @@ def strip_ansi(s):
 
 
 # ---------------------------------------------------------------------------
-# parse_rw_bands
+# parse_op_mix_bands
 # ---------------------------------------------------------------------------
 
 
 class TestParseRwBands:
     def test_single_band(self):
-        assert parse_rw_bands(["0.01-0.05"]) == [(0.01, 0.05)]
+        assert parse_op_mix_bands(["0.01-0.05"]) == [(0.01, 0.05)]
 
     def test_multiple_bands(self):
-        result = parse_rw_bands(["0.01-0.05", "0.20-0.50"])
+        result = parse_op_mix_bands(["0.01-0.05", "0.20-0.50"])
         assert result == [(0.01, 0.05), (0.20, 0.50)]
 
     def test_zero_to_one_extremes(self):
-        assert parse_rw_bands(["0.0-1.0"]) == [(0.0, 1.0)]
+        assert parse_op_mix_bands(["0.0-1.0"]) == [(0.0, 1.0)]
 
     def test_equal_low_high(self):
-        assert parse_rw_bands(["0.5-0.5"]) == [(0.5, 0.5)]
+        assert parse_op_mix_bands(["0.5-0.5"]) == [(0.5, 0.5)]
 
     def test_invalid_format_missing_hyphen(self):
         with pytest.raises(ValueError, match="Invalid band format"):
-            parse_rw_bands(["0.01"])
+            parse_op_mix_bands(["0.01"])
 
     def test_invalid_format_too_many_parts(self):
         # split("-", 1) means "0.01-0.05-0.10" => ("0.01", "0.05-0.10")
         # float("0.05-0.10") raises ValueError from float()
         with pytest.raises(ValueError):
-            parse_rw_bands(["0.01-0.05-0.10"])
+            parse_op_mix_bands(["0.01-0.05-0.10"])
 
     def test_out_of_range_low(self):
         # 1.1 is > 1.0, triggers the range check
         with pytest.raises(ValueError, match="Band values must be in"):
-            parse_rw_bands(["1.1-0.5"])
+            parse_op_mix_bands(["1.1-0.5"])
 
     def test_out_of_range_high(self):
         with pytest.raises(ValueError, match="Band values must be in"):
-            parse_rw_bands(["0.01-1.5"])
+            parse_op_mix_bands(["0.01-1.5"])
 
     def test_empty_list(self):
-        assert parse_rw_bands([]) == []
+        assert parse_op_mix_bands([]) == []
 
 
 # ---------------------------------------------------------------------------
-# make_rw_schedule
+# make_op_mix_schedule
 # ---------------------------------------------------------------------------
 
 
 class TestMakeRwSchedule:
     def test_single_thread_count(self):
-        result = make_rw_schedule((0.1, 0.5), [4])
+        result = make_op_mix_schedule((0.1, 0.5), [4])
         assert result == [0.1]
 
     def test_two_thread_counts(self):
-        result = make_rw_schedule((0.0, 1.0), [2, 4])
+        result = make_op_mix_schedule((0.0, 1.0), [2, 4])
         assert result == [0.0, 1.0]
 
     def test_three_thread_counts_linear(self):
-        result = make_rw_schedule((0.0, 1.0), [2, 4, 8])
+        result = make_op_mix_schedule((0.0, 1.0), [2, 4, 8])
         assert len(result) == 3
         assert result[0] == pytest.approx(0.0)
         assert result[1] == pytest.approx(0.5)
         assert result[2] == pytest.approx(1.0)
 
     def test_equal_band_is_flat(self):
-        result = make_rw_schedule((0.3, 0.3), [2, 4, 8, 16])
+        result = make_op_mix_schedule((0.3, 0.3), [2, 4, 8, 16])
         assert all(v == pytest.approx(0.3) for v in result)
 
     def test_seven_thread_counts(self):
         thread_counts = [2, 4, 8, 12, 16, 20, 24]
-        result = make_rw_schedule((0.01, 0.05), thread_counts)
+        result = make_op_mix_schedule((0.01, 0.05), thread_counts)
         assert len(result) == 7
         assert result[0] == pytest.approx(0.01)
         assert result[-1] == pytest.approx(0.05)
@@ -193,6 +193,21 @@ class TestFormatThroughputLine:
         assert "Build" not in line
         assert "p50" not in line
 
+    def test_with_target_vs_achieved_write_ratio(self):
+        line = strip_ansi(
+            format_throughput_line(
+                8,
+                2,
+                6,
+                9000.0,
+                8000.0,
+                target_write_ratio=0.20,
+                achieved_write_ratio=0.24,
+            )
+        )
+        assert "W tgt/ach" in line
+        assert "20.0%/24.0%" in line
+
 
 # ---------------------------------------------------------------------------
 # format_benchmark_header
@@ -210,7 +225,7 @@ class TestFormatBenchmarkHeader:
 
     def test_contains_ratio(self):
         header = strip_ansi(format_benchmark_header("HNSWVanilla", 0.1))
-        assert "W/R=0.1" in header
+        assert "OpMixW=0.1" in header
 
     def test_external_names_accepted(self):
         for name in ["Redis", "Weaviate", "USearch", "FAISS-HNSW"]:
@@ -218,8 +233,8 @@ class TestFormatBenchmarkHeader:
             assert isinstance(header, str)
             assert name in strip_ansi(header)
 
-    def test_tuple_rw_ratio(self):
+    def test_tuple_op_mix_ratio(self):
         header = strip_ansi(format_benchmark_header("HNSWVanilla", (0.01, 0.05)))
         assert "HNSWVanilla" in header
-        # Should not contain the plain "W/R=..." form
-        assert "W/R=" not in header
+        # Should not contain the plain "OpMixW=..." form
+        assert "OpMixW=" not in header
