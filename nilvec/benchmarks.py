@@ -166,6 +166,19 @@ def benchmark_throughput_vs_threads(
 
         search_lat_lists = [[] for _ in range(num_search_threads)]
         insert_lat_lists = [[] for _ in range(num_insert_threads)]
+        worker_errors = []
+        worker_errors_lock = threading.Lock()
+
+        def _record_worker_error(worker_kind, err):
+            with worker_errors_lock:
+                worker_errors.append((worker_kind, err))
+            stop_event.set()
+
+        def _thread_target(worker_kind, worker_fn, *worker_args):
+            try:
+                worker_fn(*worker_args)
+            except BaseException as e:
+                _record_worker_error(worker_kind, e)
 
         def search_worker(qs, latency_list):
             ops_until_next = (
@@ -210,7 +223,13 @@ def benchmark_throughput_vs_threads(
                 start = i * chunk_s
                 end = (i + 1) * chunk_s if i < num_insert_threads - 1 else len(data)
                 t = threading.Thread(
-                    target=insert_worker, args=(data[start:end], insert_lat_lists[i])
+                    target=_thread_target,
+                    args=(
+                        "insert",
+                        insert_worker,
+                        data[start:end],
+                        insert_lat_lists[i],
+                    ),
                 )
                 threads.append(t)
                 t.start()
@@ -218,7 +237,8 @@ def benchmark_throughput_vs_threads(
         if num_search_threads > 0:
             for i in range(num_search_threads):
                 t = threading.Thread(
-                    target=search_worker, args=(queries, search_lat_lists[i])
+                    target=_thread_target,
+                    args=("search", search_worker, queries, search_lat_lists[i]),
                 )
                 threads.append(t)
                 t.start()
@@ -236,6 +256,15 @@ def benchmark_throughput_vs_threads(
             if hasattr(index, "close"):
                 index.close()
             return None, None, None, None
+
+        if worker_errors:
+            first_kind, first_err = worker_errors[0]
+            if hasattr(index, "close"):
+                index.close()
+            raise RuntimeError(
+                f"worker {first_kind} error at threads={num_threads}: "
+                f"{type(first_err).__name__}: {first_err}"
+            ) from first_err
 
         duration = time.time() - start_time
 
