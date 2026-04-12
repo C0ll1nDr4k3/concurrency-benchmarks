@@ -122,7 +122,6 @@ def _run_single_dataset(args, dataset_path):
 
     ip = ivf(cfg.NUM_VECTORS)
     # Single fixed-M config for throughput benchmark.
-    # Recall benchmark uses paired M+ef sweep via hnsw().
     hp = hnsw(M=16)
 
     # --- recall_vs_qps ---
@@ -151,7 +150,14 @@ def _run_single_dataset(args, dataset_path):
                 "HNSW Fine Pess SQ8",
             ),
         ]
-        ann_indexes = [(cls, name, hnsw()) for cls, name in hnsw_classes]
+        # hnsw() returns one IndexParams per M value; expand into separate
+        # benchmark entries so each M is built once and ef_search is swept.
+        hnsw_param_list = hnsw()
+        ann_indexes = [
+            (cls, f"{name} M={p.construction[0]}", p)
+            for cls, name in hnsw_classes
+            for p in hnsw_param_list
+        ]
         ann_indexes += [
             (nilvec.IVFFlatVanilla, "IVFFlat Vanilla", ip),
             (nilvec.IVFFlatCoarseOptimistic, "IVF Coarse Opt", ip),
@@ -163,7 +169,10 @@ def _run_single_dataset(args, dataset_path):
             ),
         ]
         if hnswlib is not None:
-            ann_indexes += [(HnswLibIndex, "HnswLib", hnsw())]
+            ann_indexes += [
+                (HnswLibIndex, f"HnswLib M={p.construction[0]}", p)
+                for p in hnsw_param_list
+            ]
 
         for index_cls, index_name, idx_params in ann_indexes:
             res = benchmark_recall_vs_qps(

@@ -33,23 +33,21 @@ from math import sqrt
 class IndexParams:
     """Construction args + search sweep for a single index configuration.
 
-    When ``paired_sweep`` is set, each entry is a ``(construction_args, search_dict)``
-    pair.  ``benchmark_recall_vs_qps`` builds a fresh index per pair so that
-    construction parameters (e.g. M) and search parameters (e.g. ef) can vary
-    together along a single recall-vs-QPS curve.  ``construction`` and
-    ``search_sweep`` are ignored in this mode.
+    ``construction`` holds positional args passed to the index constructor
+    (e.g. [M, ef_construction]).  ``search_sweep`` lists dicts of query-time
+    parameters to sweep (e.g. [{"ef": 10}, {"ef": 20}, ...]).  The benchmark
+    builds the index once per IndexParams and then evaluates every entry in
+    ``search_sweep`` on that same index.
     """
 
     construction: list = field(default_factory=list)
     search_sweep: list[dict] = field(default_factory=lambda: [{}])
-    paired_sweep: "list[tuple[list, dict]] | None" = None
 
 
 # ---------------------------------------------------------------------------
 # Factory functions
 # ---------------------------------------------------------------------------
 
-# Nine paired (M, ef) values so counts match 1-to-1.
 _DEFAULT_HNSW_M_VALUES = [4, 8, 16, 32, 48, 64, 96, 128, 192]
 _DEFAULT_HNSW_EF_SEARCH = [10, 20, 40, 80, 120, 200, 400, 600, 800]
 
@@ -62,32 +60,24 @@ def hnsw(
     """HNSW-family parameters.
 
     M can be:
-      - None (default): returns a single IndexParams whose ``paired_sweep``
-        co-varies M and ef together (one insert + one query per pair).
-      - a list of ints: returns one IndexParams per M value (classic sweep)
+      - None (default): returns one IndexParams per default M value, each
+        sweeping all ef_search values.  The index is built once per M and
+        the full ef_search sweep runs on that single build.
+      - a list of ints: same — one IndexParams per M value
       - a single int: returns a single IndexParams
 
     Examples:
-        hnsw()           # paired M+ef sweep, single IndexParams
-        hnsw(M=16)       # single config
-        hnsw(M=[32, 64]) # per-M sweep, list of IndexParams
+        hnsw()           # list of IndexParams, one per default M
+        hnsw(M=16)       # single config, sweeps ef_search
+        hnsw(M=[32, 64]) # two IndexParams
     """
     if ef_search is None:
         ef_search = list(_DEFAULT_HNSW_EF_SEARCH)
 
-    if M is None:
-        m_values = list(_DEFAULT_HNSW_M_VALUES)
-        if len(m_values) != len(ef_search):
-            raise ValueError(
-                f"_DEFAULT_HNSW_M_VALUES ({len(m_values)}) and "
-                f"_DEFAULT_HNSW_EF_SEARCH ({len(ef_search)}) must have equal length"
-            )
-        pairs = [
-            ([m, ef_construction], {"ef": ef}) for m, ef in zip(m_values, ef_search)
-        ]
-        return IndexParams(paired_sweep=pairs)
-
     sweep = [{"ef": ef} for ef in ef_search]
+
+    if M is None:
+        M = list(_DEFAULT_HNSW_M_VALUES)
 
     if isinstance(M, list):
         return [
