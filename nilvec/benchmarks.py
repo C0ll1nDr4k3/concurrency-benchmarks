@@ -102,81 +102,87 @@ def benchmark_recall_vs_qps(
 
     results = []
 
-    if params is not None and params.paired_sweep is not None:
-        # Paired mode: rebuild index for each (construction, search) pair so
-        # both M and ef advance together along the curve.
-        for construction_args, search_dict in params.paired_sweep:
-            label = f"M={construction_args[0]} ef={search_dict.get('ef', '?')}"
-            index = _build_and_insert(
-                index_cls, index_name, construction_args, data, label
-            )
-
-            if "nprobe" in search_dict:
-                index.set_nprobe(search_dict["nprobe"])
-
-            start = time.time()
-            res_ids_list, latencies_ms = _run_search_pass(
-                index, queries, k, search_dict, latency_sample_rate
-            )
-            duration = time.time() - start
-            qps = len(queries) / duration
-            recall = compute_recall(res_ids_list, gt, k)
-
-            if latencies_ms:
-                p50 = float(np.percentile(latencies_ms, 50))
-                p95 = float(np.percentile(latencies_ms, 95))
-                p99 = float(np.percentile(latencies_ms, 99))
-            else:
-                p50 = p95 = p99 = None
-
-            print(
-                f"  {Fore.WHITE}Params: {label}{Style.RESET_ALL} -> "
-                f"{Fore.BLUE}Recall:{Style.RESET_ALL} {Fore.GREEN}{recall:.4f}{Style.RESET_ALL}, "
-                f"{Fore.BLUE}QPS:{Style.RESET_ALL} {Fore.GREEN}{qps:.0f}{Style.RESET_ALL}"
-                + (
-                    f", {Fore.BLUE}p50/p95/p99:{Style.RESET_ALL} "
-                    f"{Fore.GREEN}{p50:.2f}/{p95:.2f}/{p99:.2f}ms{Style.RESET_ALL}"
-                    if p50 is not None
-                    else ""
+    try:
+        if params is not None and params.paired_sweep is not None:
+            # Paired mode: rebuild index for each (construction, search) pair so
+            # both M and ef advance together along the curve.
+            for construction_args, search_dict in params.paired_sweep:
+                label = f"M={construction_args[0]} ef={search_dict.get('ef', '?')}"
+                index = _build_and_insert(
+                    index_cls, index_name, construction_args, data, label
                 )
-            )
-            results.append((recall, qps, p50, p95, p99))
-    else:
-        index_args, search_params = _unpack_params(index_args, search_params, params)
 
-        index = _build_and_insert(index_cls, index_name, index_args, data, "")
+                if "nprobe" in search_dict:
+                    index.set_nprobe(search_dict["nprobe"])
 
-        for sp in search_params:
-            if "nprobe" in sp:
-                index.set_nprobe(sp["nprobe"])
-
-            start = time.time()
-            res_ids_list, latencies_ms = _run_search_pass(
-                index, queries, k, sp, latency_sample_rate
-            )
-            duration = time.time() - start
-            qps = len(queries) / duration
-            recall = compute_recall(res_ids_list, gt, k)
-
-            if latencies_ms:
-                p50 = float(np.percentile(latencies_ms, 50))
-                p95 = float(np.percentile(latencies_ms, 95))
-                p99 = float(np.percentile(latencies_ms, 99))
-            else:
-                p50 = p95 = p99 = None
-
-            print(
-                f"  {Fore.WHITE}Params: {sp}{Style.RESET_ALL} -> "
-                f"{Fore.BLUE}Recall:{Style.RESET_ALL} {Fore.GREEN}{recall:.4f}{Style.RESET_ALL}, "
-                f"{Fore.BLUE}QPS:{Style.RESET_ALL} {Fore.GREEN}{qps:.0f}{Style.RESET_ALL}"
-                + (
-                    f", {Fore.BLUE}p50/p95/p99:{Style.RESET_ALL} "
-                    f"{Fore.GREEN}{p50:.2f}/{p95:.2f}/{p99:.2f}ms{Style.RESET_ALL}"
-                    if p50 is not None
-                    else ""
+                start = time.time()
+                res_ids_list, latencies_ms = _run_search_pass(
+                    index, queries, k, search_dict, latency_sample_rate
                 )
+                duration = time.time() - start
+                qps = len(queries) / duration
+                recall = compute_recall(res_ids_list, gt, k)
+
+                if latencies_ms:
+                    p50 = float(np.percentile(latencies_ms, 50))
+                    p95 = float(np.percentile(latencies_ms, 95))
+                    p99 = float(np.percentile(latencies_ms, 99))
+                else:
+                    p50 = p95 = p99 = None
+
+                print(
+                    f"  {Fore.WHITE}Params: {label}{Style.RESET_ALL} -> "
+                    f"{Fore.BLUE}Recall:{Style.RESET_ALL} {Fore.GREEN}{recall:.4f}{Style.RESET_ALL}, "
+                    f"{Fore.BLUE}QPS:{Style.RESET_ALL} {Fore.GREEN}{qps:.0f}{Style.RESET_ALL}"
+                    + (
+                        f", {Fore.BLUE}p50/p95/p99:{Style.RESET_ALL} "
+                        f"{Fore.GREEN}{p50:.2f}/{p95:.2f}/{p99:.2f}ms{Style.RESET_ALL}"
+                        if p50 is not None
+                        else ""
+                    )
+                )
+                results.append((recall, qps, p50, p95, p99))
+        else:
+            index_args, search_params = _unpack_params(
+                index_args, search_params, params
             )
-            results.append((recall, qps, p50, p95, p99))
+
+            index = _build_and_insert(index_cls, index_name, index_args, data, "")
+
+            for sp in search_params:
+                if "nprobe" in sp:
+                    index.set_nprobe(sp["nprobe"])
+
+                start = time.time()
+                res_ids_list, latencies_ms = _run_search_pass(
+                    index, queries, k, sp, latency_sample_rate
+                )
+                duration = time.time() - start
+                qps = len(queries) / duration
+                recall = compute_recall(res_ids_list, gt, k)
+
+                if latencies_ms:
+                    p50 = float(np.percentile(latencies_ms, 50))
+                    p95 = float(np.percentile(latencies_ms, 95))
+                    p99 = float(np.percentile(latencies_ms, 99))
+                else:
+                    p50 = p95 = p99 = None
+
+                print(
+                    f"  {Fore.WHITE}Params: {sp}{Style.RESET_ALL} -> "
+                    f"{Fore.BLUE}Recall:{Style.RESET_ALL} {Fore.GREEN}{recall:.4f}{Style.RESET_ALL}, "
+                    f"{Fore.BLUE}QPS:{Style.RESET_ALL} {Fore.GREEN}{qps:.0f}{Style.RESET_ALL}"
+                    + (
+                        f", {Fore.BLUE}p50/p95/p99:{Style.RESET_ALL} "
+                        f"{Fore.GREEN}{p50:.2f}/{p95:.2f}/{p99:.2f}ms{Style.RESET_ALL}"
+                        if p50 is not None
+                        else ""
+                    )
+                )
+                results.append((recall, qps, p50, p95, p99))
+    except KeyboardInterrupt:
+        print(f"\nSkipping {index_name}: interrupted")
+        return None
 
     recall_elapsed = time.time() - recall_start_time
     print(
