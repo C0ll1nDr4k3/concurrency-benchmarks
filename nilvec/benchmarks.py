@@ -197,26 +197,28 @@ def benchmark_throughput_vs_threads(
 
     stop_event = threading.Event()
 
+    # Build and preload once — reused across all thread-count iterations.
+    if "IVF" in index_name:
+        index = index_cls(config.DIM, *index_args)
+        index.train(data)
+    else:
+        index = index_cls(config.DIM, *index_args)
+
+    preload_start = time.time()
+    if preload_n > 0:
+        for vec in tqdm(preload_data, desc=f"  Preload {index_name}", unit="vec"):
+            index.insert(vec)
+    preload_time = time.time() - preload_start
+
     for num_threads in config.THREAD_COUNTS:
         if stop_event.is_set():
             break
 
-        build_start = time.time()
-        if "IVF" in index_name:
-            index = index_cls(config.DIM, *index_args)
-            index.train(data)
-        else:
-            index = index_cls(config.DIM, *index_args)
-
-        # Single-threaded preload — not part of the measured phase.
-        if preload_n > 0:
-            for vec in preload_data:
-                index.insert(vec)
-
         if hasattr(index, "set_num_threads"):
             index.set_num_threads(num_threads)
 
-        build_time = time.time() - build_start
+        build_time = preload_time
+        preload_time = 0.0  # only charge preload to the first iteration
         build_times.append(build_time)
         start_time = time.time()
 
@@ -394,8 +396,8 @@ def benchmark_throughput_vs_threads(
         else:
             conflict_rates.append(0)
 
-        if hasattr(index, "close"):
-            index.close()
+    if hasattr(index, "close"):
+        index.close()
 
     index_elapsed = time.time() - index_start_time
     print(
