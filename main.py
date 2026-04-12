@@ -3,7 +3,6 @@ import os
 import pickle
 import sys
 import time
-from math import sqrt
 
 import colorama
 from colorama import Fore, Style
@@ -41,6 +40,7 @@ from nilvec.external_indexes import (
 )
 from nilvec.formatting import _format_elapsed
 from nilvec.metrics import get_ground_truth, redis_benchmark_ready
+from nilvec.params import hnsw, ivf
 from nilvec.store import BenchmarkResultsStore
 from plotting.benchmark_plots import (
     plot_conflict_rate,
@@ -120,67 +120,58 @@ def _run_single_dataset(args, dataset_path):
         "external_names": [],
     }
 
-    hnsw_args = [16, 200]
-    nlist = int(cfg.NUM_VECTORS**0.5)
-    ivf_args = [nlist, int(sqrt(nlist))]
+    ip = ivf(cfg.NUM_VECTORS)
+    # Single fixed-M config for throughput benchmark.
+    # Recall benchmark sweeps all M values via hnsw().
+    hp = hnsw(M=16)
 
     # --- ANN Benchmark ---
     if not args.skip_recall:
         print("\n=== ANN Benchmark ===")
 
-        ef_values = [2**n for n in range(1, 9)]
-        hnsw_params = [{"ef": ef} for ef in ef_values]
-
-        nprobe_values = [1, 2, 4, 8, 16, 32, 64, 128]
-        ivf_params = [{"nprobe": np} for np in nprobe_values if np < nlist]
-
-        hnswlib_params = [
-            {"ef": ef} for ef in [10, 20, 40, 80, 120, 200, 400, 600, 800]
-        ]
-
         sq = nilvec.ScalarQuantizer(cfg.DIM)
         sq.train(data)
 
-        ann_indexes = [
-            (nilvec.HNSWVanilla, "HNSW Vanilla", hnsw_args, hnsw_params),
-            (nilvec.HNSWCoarseOptimistic, "HNSW Coarse Opt", hnsw_args, hnsw_params),
-            (nilvec.HNSWCoarsePessimistic, "HNSW Coarse Pess", hnsw_args, hnsw_params),
-            (nilvec.HNSWFineOptimistic, "HNSW Fine Opt", hnsw_args, hnsw_params),
-            (nilvec.HNSWFinePessimistic, "HNSW Fine Pess", hnsw_args, hnsw_params),
-            (nilvec.IVFFlatVanilla, "IVFFlat Vanilla", ivf_args, ivf_params),
-            (nilvec.IVFFlatCoarseOptimistic, "IVF Coarse Opt", ivf_args, ivf_params),
-            (nilvec.IVFFlatFineOptimistic, "IVF Fine Opt", ivf_args, ivf_params),
-            (nilvec.HybridOptimistic, "Hybrid Opt", hnsw_args, hnsw_params),
-            (nilvec.HybridPessimistic, "Hybrid Pess", hnsw_args, hnsw_params),
-            (
-                make_quantized_cls(nilvec.HNSWVanillaSQ8, sq),
-                "HNSW Vanilla SQ8",
-                hnsw_args,
-                hnsw_params,
-            ),
+        # HNSW-family: expand each class across the full M sweep.
+        hnsw_classes = [
+            (nilvec.HNSWVanilla, "HNSW Vanilla"),
+            (nilvec.HNSWCoarseOptimistic, "HNSW Coarse Opt"),
+            (nilvec.HNSWCoarsePessimistic, "HNSW Coarse Pess"),
+            (nilvec.HNSWFineOptimistic, "HNSW Fine Opt"),
+            (nilvec.HNSWFinePessimistic, "HNSW Fine Pess"),
+            (nilvec.HybridOptimistic, "Hybrid Opt"),
+            (nilvec.HybridPessimistic, "Hybrid Pess"),
+            (make_quantized_cls(nilvec.HNSWVanillaSQ8, sq), "HNSW Vanilla SQ8"),
             (
                 make_quantized_cls(nilvec.HNSWCoarseOptimisticSQ8, sq),
                 "HNSW Coarse Opt SQ8",
-                hnsw_args,
-                hnsw_params,
             ),
             (
                 make_quantized_cls(nilvec.HNSWFinePessimisticSQ8, sq),
                 "HNSW Fine Pess SQ8",
-                hnsw_args,
-                hnsw_params,
             ),
+        ]
+        ann_indexes = [
+            (cls, f"{name} M={p.construction[0]}", p)
+            for cls, name in hnsw_classes
+            for p in hnsw()
+        ]
+        ann_indexes += [
+            (nilvec.IVFFlatVanilla, "IVFFlat Vanilla", ip),
+            (nilvec.IVFFlatCoarseOptimistic, "IVF Coarse Opt", ip),
+            (nilvec.IVFFlatFineOptimistic, "IVF Fine Opt", ip),
             (
                 make_quantized_cls(nilvec.IVFFlatVanillaSQ8, sq),
                 "IVFFlat Vanilla SQ8",
-                ivf_args,
-                ivf_params,
+                ip,
             ),
         ]
         if hnswlib is not None:
-            ann_indexes.append((HnswLibIndex, "HnswLib", [16, 500], hnswlib_params))
+            ann_indexes += [
+                (HnswLibIndex, f"HnswLib M={p.construction[0]}", p) for p in hnsw()
+            ]
 
-        for index_cls, index_name, idx_args, search_params in ann_indexes:
+        for index_cls, index_name, idx_params in ann_indexes:
             res = benchmark_recall_vs_qps(
                 index_cls,
                 index_name,
@@ -188,9 +179,8 @@ def _run_single_dataset(args, dataset_path):
                 queries,
                 gt,
                 cfg.K,
-                idx_args,
-                search_params,
                 latency_sample_rate=args.latency_sample_rate,
+                params=idx_params,
             )
             recalls, qps_vals, p50s, p95s, p99s = zip(*res)
             results_cache["recall_vs_qps"]["runs"].append(
@@ -232,15 +222,15 @@ def _run_single_dataset(args, dataset_path):
         print("\n=== Throughput vs Threads Benchmark ===")
 
         indexes = [
-            (nilvec.HybridPessimistic, "Hybrid Pess", hnsw_args),
-            (nilvec.HybridOptimistic, "Hybrid Opt", hnsw_args),
-            (nilvec.HNSWVanilla, "HNSW Vanilla", hnsw_args),
-            (nilvec.HNSWCoarseOptimistic, "HNSW Coarse Opt", hnsw_args),
-            (nilvec.HNSWCoarsePessimistic, "HNSW Coarse Pess", hnsw_args),
-            (nilvec.HNSWFineOptimistic, "HNSW Fine Opt", hnsw_args),
-            (nilvec.HNSWFinePessimistic, "HNSW Fine Pess", hnsw_args),
-            (nilvec.IVFFlatCoarseOptimistic, "IVF Coarse Opt", ivf_args),
-            (nilvec.IVFFlatFineOptimistic, "IVF Fine Opt", ivf_args),
+            (nilvec.HybridPessimistic, "Hybrid Pess", hp),
+            (nilvec.HybridOptimistic, "Hybrid Opt", hp),
+            (nilvec.HNSWVanilla, "HNSW Vanilla", hp),
+            (nilvec.HNSWCoarseOptimistic, "HNSW Coarse Opt", hp),
+            (nilvec.HNSWCoarsePessimistic, "HNSW Coarse Pess", hp),
+            (nilvec.HNSWFineOptimistic, "HNSW Fine Opt", hp),
+            (nilvec.HNSWFinePessimistic, "HNSW Fine Pess", hp),
+            (nilvec.IVFFlatCoarseOptimistic, "IVF Coarse Opt", ip),
+            (nilvec.IVFFlatFineOptimistic, "IVF Fine Opt", ip),
         ]
 
         throughput_results = {}
@@ -250,19 +240,19 @@ def _run_single_dataset(args, dataset_path):
 
         externals = []
         if faiss:
-            externals.append((FaissHNSW, "FAISS HNSW", hnsw_args))
-            externals.append((FaissIVF, "FAISS IVF", ivf_args))
+            externals.append((FaissHNSW, "FAISS HNSW", hp))
+            externals.append((FaissIVF, "FAISS IVF", ip))
         if usearch:
-            externals.append((USearchIndex, "USearch", hnsw_args))
+            externals.append((USearchIndex, "USearch", hp))
         if hnswlib:
-            externals.append((HnswLibIndex, "HnswLib", [16, 500]))
+            externals.append((HnswLibIndex, "HnswLib", hp))
         if weaviate:
-            externals.append((WeaviateIndex, "Weaviate", hnsw_args))
+            externals.append((WeaviateIndex, "Weaviate", hp))
         redis_ready, redis_info = redis_benchmark_ready(
             auto_start=args.auto_start_redis
         )
         if redis_ready:
-            externals.append((RedisIndex, "Redis", hnsw_args))
+            externals.append((RedisIndex, "Redis", hp))
         elif redis is not None:
             print(
                 f"{Fore.YELLOW}Skipping Redis benchmark preflight: cannot connect to {redis_info}.{Style.RESET_ALL}\n"
@@ -271,7 +261,7 @@ def _run_single_dataset(args, dataset_path):
                 "  (pass --auto-start-redis=false to disable Docker auto-start)"
             )
 
-        for cls, name, iargs in externals:
+        for cls, name, idx_p in externals:
             if args.internal_only:
                 continue
             try:
@@ -281,8 +271,8 @@ def _run_single_dataset(args, dataset_path):
                     data,
                     queries,
                     cfg.K,
-                    iargs,
                     latency_sample_rate=args.latency_sample_rate,
+                    params=idx_p,
                 )
                 if res is None:
                     continue
@@ -293,7 +283,7 @@ def _run_single_dataset(args, dataset_path):
             except Exception as e:
                 print(f"Skipping {name}: {e}")
 
-        for cls, name, iargs in indexes:
+        for cls, name, idx_p in indexes:
             if args.external_only:
                 continue
             try:
@@ -303,8 +293,8 @@ def _run_single_dataset(args, dataset_path):
                     data,
                     queries,
                     cfg.K,
-                    iargs,
                     latency_sample_rate=args.latency_sample_rate,
+                    params=idx_p,
                 )
                 if res is None:
                     continue

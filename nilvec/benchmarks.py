@@ -13,6 +13,18 @@ from nilvec.formatting import (
     format_throughput_line,
 )
 from nilvec.metrics import compute_recall
+from nilvec.params import IndexParams
+
+
+def _unpack_params(index_args, search_params, params):
+    """Resolve IndexParams vs legacy (index_args, search_params) arguments."""
+    if params is not None:
+        return params.construction, params.search_sweep
+    if index_args is None:
+        index_args = []
+    if search_params is None:
+        search_params = [{}]
+    return index_args, search_params
 
 
 def benchmark_recall_vs_qps(
@@ -25,13 +37,17 @@ def benchmark_recall_vs_qps(
     index_args=None,
     search_params=None,
     latency_sample_rate=1.0,
+    *,
+    params: IndexParams | None = None,
 ):
     """
     Run Recall vs QPS benchmark.
     search_params: list of dicts, e.g. [{'ef': 10}, {'ef': 20}]
+
+    Prefer passing ``params`` (an IndexParams) instead of separate
+    index_args / search_params.
     """
-    if index_args is None:
-        index_args = []
+    index_args, search_params = _unpack_params(index_args, search_params, params)
 
     print(
         f"\n{Style.BRIGHT}{Fore.CYAN}Benchmarking Recall vs QPS{Style.RESET_ALL}: "
@@ -62,9 +78,6 @@ def benchmark_recall_vs_qps(
     )
 
     results = []
-
-    if search_params is None:
-        search_params = [{}]
 
     for params in search_params:
         if "nprobe" in params:
@@ -126,10 +139,14 @@ def benchmark_throughput_vs_threads(
     k,
     index_args=None,
     latency_sample_rate=0.0,
+    *,
+    params: IndexParams | None = None,
 ):
-    """Run throughput vs threads using a fixed thread-count-driven R/W split."""
-    if index_args is None:
-        index_args = []
+    """Run throughput vs threads using a fixed thread-count-driven R/W split.
+
+    Prefer passing ``params`` (an IndexParams) instead of index_args.
+    """
+    index_args, _ = _unpack_params(index_args, None, params)
 
     print(format_benchmark_header(index_name))
     index_start_time = time.time()

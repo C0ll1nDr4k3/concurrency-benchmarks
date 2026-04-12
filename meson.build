@@ -70,6 +70,7 @@ if python_bindings and py.found()
                 'nilvec/external_indexes.py',
                 'nilvec/formatting.py',
                 'nilvec/metrics.py',
+                'nilvec/params.py',
                 'nilvec/store.py',
             ],
             subdir: 'nilvec',
