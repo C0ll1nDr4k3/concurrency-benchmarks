@@ -53,7 +53,6 @@ def _build_and_insert(index_cls, index_name, construction_args, data, label):
     else:
         index = index_cls(config.DIM, *construction_args)
 
-    print(f"  {Fore.YELLOW}Inserting{Style.RESET_ALL} {label}...")
     start = time.time()
     with tqdm(
         total=len(data),
