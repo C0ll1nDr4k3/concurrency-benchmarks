@@ -132,24 +132,14 @@ def _run_single_dataset(args, dataset_path):
         sq = nilvec.ScalarQuantizer(cfg.DIM)
         sq.train(data)
 
-        # HNSW-family: expand each class across the full M sweep.
+        # Recall is single-threaded, so locking strategy doesn't affect
+        # results.  Only benchmark one representative per structural family
+        # (Vanilla, Hybrid, SQ8) plus external baselines (FAISS, hnswlib).
         hnsw_classes = [
             (nilvec.HNSWVanilla, "HNSW Vanilla"),
-            (nilvec.HNSWCoarseOptimistic, "HNSW Coarse Opt"),
-            (nilvec.HNSWCoarsePessimistic, "HNSW Coarse Pess"),
-            (nilvec.HNSWFineOptimistic, "HNSW Fine Opt"),
-            (nilvec.HNSWFinePessimistic, "HNSW Fine Pess"),
             (nilvec.HybridOptimistic, "Hybrid Opt"),
             (nilvec.HybridPessimistic, "Hybrid Pess"),
             (make_quantized_cls(nilvec.HNSWVanillaSQ8, sq), "HNSW Vanilla SQ8"),
-            (
-                make_quantized_cls(nilvec.HNSWCoarseOptimisticSQ8, sq),
-                "HNSW Coarse Opt SQ8",
-            ),
-            (
-                make_quantized_cls(nilvec.HNSWFinePessimisticSQ8, sq),
-                "HNSW Fine Pess SQ8",
-            ),
         ]
         # hnsw() returns one IndexParams per M value; expand into separate
         # benchmark entries so each M is built once and ef_search is swept.
@@ -161,14 +151,18 @@ def _run_single_dataset(args, dataset_path):
         ]
         ann_indexes += [
             (nilvec.IVFFlatVanilla, "IVFFlat Vanilla", ip),
-            (nilvec.IVFFlatCoarseOptimistic, "IVF Coarse Opt", ip),
-            (nilvec.IVFFlatFineOptimistic, "IVF Fine Opt", ip),
             (
                 make_quantized_cls(nilvec.IVFFlatVanillaSQ8, sq),
                 "IVFFlat Vanilla SQ8",
                 ip,
             ),
         ]
+        if faiss is not None:
+            ann_indexes += [
+                (FaissHNSW, f"FAISS HNSW M={p.construction[0]}", p)
+                for p in hnsw_param_list
+            ]
+            ann_indexes.append((FaissIVF, "FAISS IVF", ip))
         if hnswlib is not None:
             ann_indexes += [
                 (HnswLibIndex, f"HnswLib M={p.construction[0]}", p)
