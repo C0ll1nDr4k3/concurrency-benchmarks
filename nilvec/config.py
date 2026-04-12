@@ -4,7 +4,7 @@
 DIM = 128
 NUM_VECTORS = 10000
 NUM_QUERIES = 1000
-K = 10  # per ANN Benchmarks
+K = 10  # per recall_vs_qps
 
 THREAD_COUNTS = [2, 4, 8, 12, 16, 20, 24]
 

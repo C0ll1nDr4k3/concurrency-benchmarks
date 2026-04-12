@@ -125,9 +125,9 @@ def _run_single_dataset(args, dataset_path):
     # Recall benchmark uses paired M+ef sweep via hnsw().
     hp = hnsw(M=16)
 
-    # --- ANN Benchmark ---
+    # --- recall_vs_qps ---
     if not args.skip_recall:
-        print("\n=== ANN Benchmark ===")
+        print("\n=== recall_vs_qps ===")
 
         sq = nilvec.ScalarQuantizer(cfg.DIM)
         sq.train(data)

@@ -102,7 +102,7 @@ Downloaded automatically to `data/` on first run from ann-benchmarks.com:
 | `--all` | false | Run all datasets |
 | `--limit N` | 0 (no limit) | Truncate dataset to N vectors |
 | `--rw-bands` | `0.01-0.05 0.20-0.50` | Write-ratio bands (ramps linearly across thread counts) |
-| `--skip-recall` | false | Skip ANN recall benchmark |
+| `--skip-recall` | false | Skip recall_vs_qps benchmark |
 | `--skip-throughput` | false | Skip throughput benchmark |
 | `--internal-only` | false | Skip external index benchmarks |
 | `--external-only` | false | Skip nilvec index benchmarks |

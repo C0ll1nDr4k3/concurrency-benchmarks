@@ -341,7 +341,7 @@ class RedisIndex:
 
 
 class HnswLibIndex:
-    """hnswlib HNSW — the ann-benchmarks reference implementation (pure Python, no Docker)."""
+    """hnswlib HNSW — the recall_vs_qps reference implementation (pure Python, no Docker)."""
 
     def __init__(self, dim, M=16, ef_construction=500):
         if hnswlib is None:

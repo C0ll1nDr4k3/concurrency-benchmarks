@@ -1,8 +1,8 @@
 /**
  * @file dataset.hpp
- * @brief Dataset loading utilities for ANN benchmarks.
+ * @brief Dataset loading utilities for recall_vs_qps.
  *
- * Supports loading standard ANN benchmark datasets in HDF5 format
+ * Supports loading standard recall_vs_qps datasets in HDF5 format
  * from ann-benchmarks.com. Requires libhdf5 (H5Cpp.h).
  */
 
@@ -95,7 +95,7 @@ inline bool download_file(const std::string& url, const std::string& filepath) {
 }
 
 /**
- * @brief Load a dataset from HDF5 format (ann-benchmarks format).
+ * @brief Load a dataset from HDF5 format (recall_vs_qps format).
  */
 template <typename T>
 Dataset<T> load_hdf5(const std::string& filepath,
