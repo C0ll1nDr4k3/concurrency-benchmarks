@@ -20,6 +20,7 @@ dependencies = [
     "redis>=5.0",
     "scipy>=1.17.1",
     "hnswlib>=0.7",
+    "tqdm>=4.67",
 ]
 
 [project.optional-dependencies]

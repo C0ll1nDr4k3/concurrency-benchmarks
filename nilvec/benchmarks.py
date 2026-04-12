@@ -4,6 +4,7 @@ import time
 
 import numpy as np
 from colorama import Fore, Style
+from tqdm import tqdm
 
 from nilvec import config
 from nilvec.formatting import (
@@ -47,8 +48,15 @@ def benchmark_recall_vs_qps(
 
     print(f"  {Fore.YELLOW}Inserting...{Style.RESET_ALL}")
     start = time.time()
-    for vec in data:
-        index.insert(vec)
+    with tqdm(
+        total=len(data),
+        desc=f"  Insert {index_name}",
+        unit="vec",
+        dynamic_ncols=True,
+    ) as insert_pbar:
+        for vec in data:
+            index.insert(vec)
+            insert_pbar.update(1)
     print(
         f"  {Fore.BLUE}Insert time:{Style.RESET_ALL} {Fore.GREEN}{time.time() - start:.2f}s{Style.RESET_ALL}"
     )
@@ -168,6 +176,7 @@ def benchmark_throughput_vs_threads(
         insert_lat_lists = [[] for _ in range(num_insert_threads)]
         worker_errors = []
         worker_errors_lock = threading.Lock()
+        insert_pbar = None
 
         def _record_worker_error(worker_kind, err):
             with worker_errors_lock:
@@ -200,7 +209,7 @@ def benchmark_throughput_vs_threads(
                         if ops_until_next > 0:
                             ops_until_next -= 1
 
-        def insert_worker(vecs, latency_list):
+        def insert_worker(vecs, latency_list, progress_bar=None):
             ops_until_next = (
                 random.randint(0, sample_interval - 1) if sample_interval > 0 else -1
             )
@@ -216,8 +225,16 @@ def benchmark_throughput_vs_threads(
                     index.insert(v)
                     if ops_until_next > 0:
                         ops_until_next -= 1
+                if progress_bar is not None:
+                    progress_bar.update(1)
 
         if num_insert_threads > 0:
+            insert_pbar = tqdm(
+                total=len(data),
+                desc=f"  Insert {index_name} [T={num_threads}]",
+                unit="vec",
+                dynamic_ncols=True,
+            )
             chunk_s = len(data) // num_insert_threads
             for i in range(num_insert_threads):
                 start = i * chunk_s
@@ -229,6 +246,7 @@ def benchmark_throughput_vs_threads(
                         insert_worker,
                         data[start:end],
                         insert_lat_lists[i],
+                        insert_pbar,
                     ),
                 )
                 threads.append(t)
@@ -256,6 +274,9 @@ def benchmark_throughput_vs_threads(
             if hasattr(index, "close"):
                 index.close()
             return None, None, None, None
+        finally:
+            if insert_pbar is not None:
+                insert_pbar.close()
 
         if worker_errors:
             first_kind, first_err = worker_errors[0]

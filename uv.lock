@@ -767,6 +767,7 @@ dependencies = [
     { name = "redis" },
     { name = "requests" },
     { name = "scipy" },
+    { name = "tqdm" },
     { name = "usearch" },
     { name = "weaviate-client" },
 ]
@@ -809,6 +810,7 @@ requires-dist = [
     { name = "redis", specifier = ">=5.0" },
     { name = "requests", specifier = ">=2.31" },
     { name = "scipy", specifier = ">=1.17.1" },
+    { name = "tqdm", specifier = ">=4.67" },
     { name = "usearch", specifier = ">=2.9" },
     { name = "weaviate-client", specifier = ">=4.5" },
 ]
