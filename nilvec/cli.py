@@ -66,4 +66,11 @@ def build_parser():
         default=0.01,
         help="Fraction of queries to time for latency percentiles (0.0-1.0, default: 0.01)",
     )
+    parser.add_argument(
+        "--preload-ratio",
+        type=float,
+        default=0.5,
+        help="Fraction of dataset to pre-insert single-threaded before the "
+        "concurrent phase of the throughput benchmark (0.0-1.0, default: 0.5)",
+    )
     return parser

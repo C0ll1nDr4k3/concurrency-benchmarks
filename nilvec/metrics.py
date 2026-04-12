@@ -1,4 +1,6 @@
+import hashlib
 import os
+import pickle
 import subprocess
 import time
 from urllib.parse import urlparse
@@ -11,6 +13,8 @@ try:
     import redis
 except ImportError:
     redis = None
+
+_GT_CACHE_DIR = os.path.join("data", "gt_cache")
 
 
 def compute_recall(results, ground_truth, k):
@@ -26,8 +30,29 @@ def compute_recall(results, ground_truth, k):
     return recall_sum / len(results)
 
 
+def _gt_cache_path(data, queries, k):
+    """Derive a deterministic cache filename from the dataset fingerprint."""
+    h = hashlib.sha256()
+    h.update(f"n={len(data)},q={len(queries)},d={len(data[0])},k={k}".encode())
+    # Hash a small sample of the actual data so different datasets with the
+    # same shape don't collide.
+    for idx in (0, len(data) // 2, len(data) - 1):
+        h.update(repr(data[idx][:8]).encode())
+    for idx in (0, len(queries) // 2, len(queries) - 1):
+        h.update(repr(queries[idx][:8]).encode())
+    return os.path.join(_GT_CACHE_DIR, f"gt_{h.hexdigest()[:16]}.pkl")
+
+
 def get_ground_truth(data, queries, k):
-    """Compute brute-force ground truth using FlatVanilla"""
+    """Compute brute-force ground truth using FlatVanilla, with disk caching."""
+    cache_path = _gt_cache_path(data, queries, k)
+    if os.path.exists(cache_path):
+        print(
+            f"{Fore.GREEN}Loading cached ground truth from {cache_path}{Style.RESET_ALL}"
+        )
+        with open(cache_path, "rb") as f:
+            return pickle.load(f)
+
     print(f"{Fore.YELLOW}Computing ground truth...{Style.RESET_ALL}")
     index = FlatVanilla(len(data[0]))
     for vec in data:
@@ -37,6 +62,12 @@ def get_ground_truth(data, queries, k):
     for q in queries:
         res = index.search(q, k)
         gt.append(res.ids)
+
+    os.makedirs(_GT_CACHE_DIR, exist_ok=True)
+    with open(cache_path, "wb") as f:
+        pickle.dump(gt, f)
+    print(f"{Fore.GREEN}Cached ground truth to {cache_path}{Style.RESET_ALL}")
+
     return gt
 
 

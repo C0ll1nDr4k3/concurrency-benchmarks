@@ -4,7 +4,7 @@ Each index needs two kinds of parameters:
   - construction: positional args passed to the constructor (M, ef_construction, etc.)
   - search_sweep: list of param dicts swept during recall-vs-QPS benchmarking
 
-Factory functions (hnsw, ivf) bundle both together into an IndexParams object,
+Factory functions (hnsw, ivf) bundle both together into an IndexParams shape,
 with keyword control over every knob.  This replaces the scattered inline
 declarations that previously lived in main.py.
 
@@ -13,8 +13,8 @@ Usage examples:
     # Default HNSW params
     p = hnsw()
 
-    # High-recall FAISS-style configuration
-    p = hnsw(M=64, ef_construction=500, ef_search=[200, 400, 600, 800])
+    # High-recall FAISS-style configuration (single-entry list)
+    p = hnsw(M=64, ef_construction=500, ef_search=[200, 400, 600, 800])[0]
 
     # IVF params (nlist derived from dataset size)
     p = ivf(num_vectors=100_000)
@@ -53,10 +53,10 @@ _DEFAULT_HNSW_EF_SEARCH = [10, 20, 40, 80, 120, 200, 400, 600, 800]
 
 
 def hnsw(
-    M: "int | list[int] | None" = None,
+    M: int | list[int] | None = None,
     ef_construction: int = 500,
-    ef_search: "list[int] | None" = None,
-) -> "IndexParams | list[IndexParams]":
+    ef_search: list[int] | None = None,
+) -> list[IndexParams]:
     """HNSW-family parameters.
 
     M can be:
@@ -64,11 +64,11 @@ def hnsw(
         sweeping all ef_search values.  The index is built once per M and
         the full ef_search sweep runs on that single build.
       - a list of ints: same — one IndexParams per M value
-      - a single int: returns a single IndexParams
+      - a single int: returns a one-element list[IndexParams]
 
     Examples:
         hnsw()           # list of IndexParams, one per default M
-        hnsw(M=16)       # single config, sweeps ef_search
+        hnsw(M=16)       # one-element list, sweeps ef_search
         hnsw(M=[32, 64]) # two IndexParams
     """
     if ef_search is None:
@@ -79,13 +79,12 @@ def hnsw(
     if M is None:
         M = list(_DEFAULT_HNSW_M_VALUES)
 
-    if isinstance(M, list):
-        return [
-            IndexParams(construction=[m, ef_construction], search_sweep=sweep)
-            for m in M
-        ]
+    if not isinstance(M, list):
+        M = [M]
 
-    return IndexParams(construction=[M, ef_construction], search_sweep=sweep)
+    return [
+        IndexParams(construction=[m, ef_construction], search_sweep=sweep) for m in M
+    ]
 
 
 def ivf(

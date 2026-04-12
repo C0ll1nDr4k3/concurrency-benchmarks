@@ -160,10 +160,16 @@ def benchmark_throughput_vs_threads(
     latency_sample_rate=0.0,
     *,
     params: IndexParams | None = None,
+    preload_ratio: float = 0.5,
 ):
     """Run throughput vs threads using a fixed thread-count-driven R/W split.
 
     Prefer passing ``params`` (an IndexParams) instead of index_args.
+
+    ``preload_ratio`` (0.0–1.0) controls what fraction of ``data`` is inserted
+    single-threaded before the concurrent phase begins.  This avoids
+    re-inserting the full dataset from scratch at every thread count while
+    ensuring search threads hit a realistically populated index.
     """
     index_args, _ = _unpack_params(index_args, None, params)
 
@@ -173,6 +179,14 @@ def benchmark_throughput_vs_threads(
     conflict_rates = []
     build_times = []
     latency_data = []
+
+    # Split data into a preload portion (inserted once, single-threaded,
+    # unmeasured) and a concurrent portion (inserted by worker threads during
+    # the measured phase).
+    preload_ratio = max(0.0, min(1.0, preload_ratio))
+    preload_n = int(len(data) * preload_ratio)
+    preload_data = data[:preload_n]
+    concurrent_data = data[preload_n:]
 
     # Pre-compute a fixed sampling stride for the whole run.
     if latency_sample_rate >= 1.0:
@@ -194,6 +208,11 @@ def benchmark_throughput_vs_threads(
             index.train(data)
         else:
             index = index_cls(config.DIM, *index_args)
+
+        # Single-threaded preload — not part of the measured phase.
+        if preload_n > 0:
+            for vec in preload_data:
+                index.insert(vec)
 
         if hasattr(index, "set_num_threads"):
             index.set_num_threads(num_threads)
@@ -264,23 +283,27 @@ def benchmark_throughput_vs_threads(
                 if progress_bar is not None:
                     progress_bar.update(1)
 
-        if num_insert_threads > 0:
+        if num_insert_threads > 0 and len(concurrent_data) > 0:
             insert_pbar = tqdm(
-                total=len(data),
+                total=len(concurrent_data),
                 desc=f"  Insert {index_name} [T={num_threads}]",
                 unit="vec",
                 dynamic_ncols=True,
             )
-            chunk_s = len(data) // num_insert_threads
+            chunk_s = len(concurrent_data) // num_insert_threads
             for i in range(num_insert_threads):
                 start = i * chunk_s
-                end = (i + 1) * chunk_s if i < num_insert_threads - 1 else len(data)
+                end = (
+                    (i + 1) * chunk_s
+                    if i < num_insert_threads - 1
+                    else len(concurrent_data)
+                )
                 t = threading.Thread(
                     target=_thread_target,
                     args=(
                         "insert",
                         insert_worker,
-                        data[start:end],
+                        concurrent_data[start:end],
                         insert_lat_lists[i],
                         insert_pbar,
                     ),
@@ -341,7 +364,11 @@ def benchmark_throughput_vs_threads(
         i_p50, i_p95, i_p99 = _pcts(all_insert_lat)
         latency_data.append((s_p50, s_p95, s_p99, i_p50, i_p95, i_p99))
 
-        total_inserts = len(data) if num_insert_threads > 0 else 0
+        total_inserts = (
+            len(concurrent_data)
+            if (num_insert_threads > 0 and len(concurrent_data) > 0)
+            else 0
+        )
         total_searches = num_search_threads * len(queries) * 5
 
         total_ops = total_inserts + total_searches

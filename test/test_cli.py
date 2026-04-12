@@ -107,9 +107,13 @@ class TestValueArgs:
         args = parser.parse_args(["--latency-sample-rate", "0.1"])
         assert args.latency_sample_rate == pytest.approx(0.1)
 
-    def test_preload_ratio_removed(self, parser):
-        with pytest.raises(SystemExit):
-            parser.parse_args(["--preload-ratio", "0.8"])
+    def test_preload_ratio(self, parser):
+        args = parser.parse_args(["--preload-ratio", "0.8"])
+        assert args.preload_ratio == pytest.approx(0.8)
+
+    def test_preload_ratio_default(self, parser):
+        args = parser.parse_args([])
+        assert args.preload_ratio == pytest.approx(0.5)
 
     def test_rw_ratio_flag_removed(self, parser):
         with pytest.raises(SystemExit):

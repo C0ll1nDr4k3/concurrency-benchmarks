@@ -121,8 +121,9 @@ def _run_single_dataset(args, dataset_path):
     }
 
     ip = ivf(cfg.NUM_VECTORS)
-    # Single fixed-M config for throughput benchmark.
-    hp = hnsw(M=16)
+    # Single fixed-M config for throughput benchmark (explicitly selecting the
+    # one returned list element).
+    hp = hnsw(M=16)[0]
 
     # --- recall_vs_qps ---
     if not args.skip_recall:
@@ -278,6 +279,7 @@ def _run_single_dataset(args, dataset_path):
                     cfg.K,
                     latency_sample_rate=args.latency_sample_rate,
                     params=idx_p,
+                    preload_ratio=args.preload_ratio,
                 )
                 if res is None:
                     continue
@@ -300,6 +302,7 @@ def _run_single_dataset(args, dataset_path):
                     cfg.K,
                     latency_sample_rate=args.latency_sample_rate,
                     params=idx_p,
+                    preload_ratio=args.preload_ratio,
                 )
                 if res is None:
                     continue
