@@ -47,7 +47,7 @@ from plotting.benchmark_plots import (
     plot_recall_vs_qps,
     plot_throughput,
 )
-from plotting.style import DPI, get_plot_style_token
+from plotting.style import DPI
 
 
 def _run_single_dataset(args, dataset_path):
@@ -184,7 +184,7 @@ def _run_single_dataset(args, dataset_path):
                 continue
             recalls, qps_vals, p50s, p95s, p99s = zip(*res)
             results_cache["recall_vs_qps"]["runs"].append(
-                (index_name, recalls, qps_vals, get_plot_style_token(index_name))
+                (index_name, recalls, qps_vals, None)
             )
             results_cache["recall_vs_qps"]["latencies"][index_name] = list(
                 zip(p50s, p95s, p99s)

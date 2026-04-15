@@ -9,6 +9,7 @@ from plotting.benchmark_plots import (
     plot_recall_vs_qps,
     plot_throughput,
 )
+from plotting.style import is_external_index
 
 
 def _resolve_run_id(conn, run_id):
@@ -28,7 +29,7 @@ def _resolve_run_id(conn, run_id):
     return row[0]
 
 
-def _load_plot_data(db_path, run_id=None):
+def _load_plot_data(db_path, run_id=None, external_only=False, internal_only=False):
     if not os.path.exists(db_path):
         raise FileNotFoundError(f"Results DB {db_path} not found")
 
@@ -64,6 +65,7 @@ def _load_plot_data(db_path, run_id=None):
     throughput = {}
     conflicts = {}
     external_names = set()
+    external_by_name = {}
     thread_pos = {int(t): i for i, t in enumerate(thread_counts)}
     for (
         index_name,
@@ -72,6 +74,12 @@ def _load_plot_data(db_path, run_id=None):
         conflict_rate,
         is_external,
     ) in throughput_rows:
+        is_external = bool(is_external)
+        external_by_name[index_name] = is_external
+        if external_only and not is_external:
+            continue
+        if internal_only and is_external:
+            continue
         if index_name not in throughput:
             throughput[index_name] = [float("nan")] * len(thread_counts)
             conflicts[index_name] = [float("nan")] * len(thread_counts)
@@ -94,6 +102,13 @@ def _load_plot_data(db_path, run_id=None):
     ).fetchall()
     recall_grouped = {}
     for index_name, recall, qps, line_style in recall_rows:
+        is_external = external_by_name.get(index_name)
+        if is_external is None:
+            is_external = is_external_index(index_name, external_names)
+        if external_only and not is_external:
+            continue
+        if internal_only and is_external:
+            continue
         recall_grouped.setdefault(
             index_name, {"recalls": [], "qps": [], "style": line_style}
         )
@@ -109,7 +124,7 @@ def _load_plot_data(db_path, run_id=None):
     _plot_limit = int(limit_rows) if limit_rows and int(limit_rows) > 0 else "full"
     return {
         "run_id": selected_run_id,
-        "rw_ratio": float(rw_ratio),
+        "rw_ratio": float(rw_ratio) if rw_ratio is not None else None,
         "thread_counts": thread_counts,
         "k": int(k),
         "dim": int(dim),
@@ -122,8 +137,20 @@ def _load_plot_data(db_path, run_id=None):
     }
 
 
-def plot_results(results_db, output_dir="paper/plots", dpi=1200, run_id=None):
-    data = _load_plot_data(results_db, run_id=run_id)
+def plot_results(
+    results_db,
+    output_dir="paper/plots",
+    dpi=1200,
+    run_id=None,
+    external_only=False,
+    internal_only=False,
+):
+    data = _load_plot_data(
+        results_db,
+        run_id=run_id,
+        external_only=external_only,
+        internal_only=internal_only,
+    )
 
     dataset_subdir = f"{data['dataset_name']}_{data['plot_limit']}"
     output_dir = os.path.join(output_dir, dataset_subdir)
@@ -142,7 +169,11 @@ def plot_results(results_db, output_dir="paper/plots", dpi=1200, run_id=None):
 
     if data["throughput"]:
         rw_ratio = data["rw_ratio"]
-        title = f"Throughput (W:{rw_ratio:.1f}, R:{1.0 - rw_ratio:.1f})"
+        title = (
+            f"Throughput (W:{rw_ratio:.1f}, R:{1.0 - rw_ratio:.1f})"
+            if rw_ratio is not None
+            else "Throughput"
+        )
         print("Plotting Throughput vs Threads...")
         plot_throughput(
             data["throughput"],
@@ -158,6 +189,7 @@ def plot_results(results_db, output_dir="paper/plots", dpi=1200, run_id=None):
         plot_conflict_rate(
             data["conflicts"],
             data["thread_counts"],
+            external_names=data["external_names"],
             output_path=os.path.join(output_dir, "conflict_rate.svg"),
             dpi=dpi,
         )
@@ -183,6 +215,19 @@ if __name__ == "__main__":
         "--out", type=str, default="paper/plots", help="Output directory"
     )
     parser.add_argument("--dpi", type=int, default=1200, help="DPI for plots")
+    parser.add_argument(
+        "--external-only", action="store_true", help="Plot only external indexes"
+    )
+    parser.add_argument(
+        "--internal-only", action="store_true", help="Plot only internal indexes"
+    )
 
     args = parser.parse_args()
-    plot_results(args.results_db, args.out, args.dpi, run_id=args.run_id or None)
+    plot_results(
+        args.results_db,
+        args.out,
+        args.dpi,
+        run_id=args.run_id or None,
+        external_only=args.external_only,
+        internal_only=args.internal_only,
+    )
