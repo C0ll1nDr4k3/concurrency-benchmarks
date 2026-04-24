@@ -155,3 +155,64 @@ def plot_conflict_rate(
     plt.tight_layout()
     plt.savefig(output_path, dpi=dpi)
     plt.close()
+
+
+def plot_disjoint_rate(
+    disjoint,
+    thread_counts,
+    *,
+    external_names=None,
+    output_path,
+    dpi=DPI,
+    layer=0,
+):
+    """Plot layer-0 (by default) disjoint rate vs thread count for HNSW indexes.
+
+    disjoint: {index_name: [(N, [rate_layer0, rate_layer1, ...]), ...]} keyed
+    by thread-count iteration (parallel to thread_counts).
+
+    The model predicts δ ≈ ρ · T² / N for optimistic strategies. To make the
+    T² dependence visible across runs with growing N, we plot δ · N on the
+    y-axis: optimistic curves should trace a quadratic in T, while vanilla
+    and pessimistic variants stay flat near zero.
+    """
+    plt.figure(figsize=(8, 6))
+    ax = plt.gca()
+    plotted = False
+
+    for name, series in disjoint.items():
+        if not series:
+            continue
+        xs = []
+        ys = []
+        for t, (n, rates) in zip(thread_counts, series):
+            if not rates or layer >= len(rates) or n == 0:
+                continue
+            xs.append(t)
+            ys.append(rates[layer] * n)
+        if not xs:
+            continue
+        style_cfg = get_plot_style(name, external_names)
+        plt.plot(
+            xs,
+            ys,
+            label=name,
+            color=style_cfg["color"],
+            linestyle=style_cfg["linestyle"],
+            marker=style_cfg["marker"],
+            alpha=style_cfg["alpha"],
+        )
+        plotted = True
+
+    if not plotted:
+        plt.close()
+        return
+
+    plt.xlabel("Threads")
+    plt.ylabel(f"Disjoint rate × N (layer {layer})")
+    plt.title(f"Layer-{layer} Disjoint Rate (scaled by N)")
+    ax.legend(loc="best")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=dpi)
+    plt.close()

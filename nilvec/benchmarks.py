@@ -170,7 +170,10 @@ def benchmark_throughput_vs_threads(
     re-inserting the full dataset from scratch at every thread count while
     ensuring search threads hit a realistically populated index.
     """
-    index_args, _ = _unpack_params(index_args, None, params)
+    index_args, search_params = _unpack_params(index_args, None, params)
+    # Standardize throughput to the highest-recall operating point from the
+    # provided search sweep.
+    fixed_search = search_params[-1] if search_params else {}
 
     print(format_benchmark_header(index_name))
     index_start_time = time.time()
@@ -178,6 +181,7 @@ def benchmark_throughput_vs_threads(
     conflict_rates = []
     build_times = []
     latency_data = []
+    disjoint_data = []  # list of (N, [rate_layer0, rate_layer1, ...]) per thread count
 
     # Split data into a preload portion (inserted once, single-threaded,
     # unmeasured) and a concurrent portion (inserted by worker threads during
@@ -216,6 +220,8 @@ def benchmark_throughput_vs_threads(
 
         if hasattr(index, "set_num_threads"):
             index.set_num_threads(num_threads)
+        if "nprobe" in fixed_search and hasattr(index, "set_nprobe"):
+            index.set_nprobe(fixed_search["nprobe"])
 
         build_time = preload_time
         preload_time = 0.0  # only charge preload to the first iteration
@@ -257,11 +263,17 @@ def benchmark_throughput_vs_threads(
                         break
                     if ops_until_next == 0:
                         t0 = time.perf_counter()
-                        index.search(q, k)
+                        if "ef" in fixed_search:
+                            index.search(q, k, fixed_search["ef"])
+                        else:
+                            index.search(q, k)
                         latency_list.append((time.perf_counter() - t0) * 1000)
                         ops_until_next = sample_interval - 1
                     else:
-                        index.search(q, k)
+                        if "ef" in fixed_search:
+                            index.search(q, k, fixed_search["ef"])
+                        else:
+                            index.search(q, k)
                         if ops_until_next > 0:
                             ops_until_next -= 1
 
@@ -333,7 +345,7 @@ def benchmark_throughput_vs_threads(
 
             if hasattr(index, "close"):
                 index.close()
-            return None, None, None, None
+            return None, None, None, None, None
         finally:
             if insert_pbar is not None:
                 insert_pbar.close()
@@ -396,6 +408,12 @@ def benchmark_throughput_vs_threads(
         else:
             conflict_rates.append(0)
 
+        if hasattr(index, "disjoint_rates"):
+            rates = list(index.disjoint_rates())
+            disjoint_data.append((int(index.size()), rates))
+        else:
+            disjoint_data.append((0, []))
+
     if hasattr(index, "close"):
         index.close()
 
@@ -404,4 +422,4 @@ def benchmark_throughput_vs_threads(
         f"  {Fore.WHITE}Elapsed time for {Style.BRIGHT}{index_name}{Style.RESET_ALL}"
         f"{Fore.WHITE}: {_format_elapsed(index_elapsed)}{Style.RESET_ALL}"
     )
-    return results, conflict_rates, build_times, latency_data
+    return results, conflict_rates, build_times, latency_data, disjoint_data

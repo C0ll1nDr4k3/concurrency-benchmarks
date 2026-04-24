@@ -95,7 +95,8 @@ PYBIND11_MODULE(_nilvec, m) {
                 },
                 py::arg("query"), py::arg("k"), py::arg("ef") = 0)
             .def("size", &Index::size)
-            .def("max_level", &Index::max_level);
+            .def("max_level", &Index::max_level)
+            .def("disjoint_rates", &Index::disjoint_rates);
 
     if (has_stats) {
       // We need to use a lambda or similar if the method might not exist in
@@ -312,7 +313,8 @@ PYBIND11_MODULE(_nilvec, m) {
                 },
                 py::arg("query"), py::arg("k"), py::arg("ef") = 0)
             .def("size", &Index::size)
-            .def("max_level", &Index::max_level);
+            .def("max_level", &Index::max_level)
+            .def("disjoint_rates", &Index::disjoint_rates);
 
     if (has_stats) {
       cls.def(

@@ -60,6 +60,18 @@ class BenchmarkResultsStore:
         )
         self.conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS disjoint_points (
+                run_id VARCHAR,
+                index_name VARCHAR,
+                thread_count INTEGER,
+                layer INTEGER,
+                num_vectors INTEGER,
+                disjoint_rate DOUBLE
+            )
+            """
+        )
+        self.conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS recall_points (
                 run_id VARCHAR,
                 index_name VARCHAR,
@@ -217,6 +229,37 @@ class BenchmarkResultsStore:
                     search_p50_ms, search_p95_ms, search_p99_ms,
                     insert_p50_ms, insert_p95_ms, insert_p99_ms
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
+
+    def save_disjoint(self, run_id, disjoint_results, thread_counts):
+        """
+        disjoint_results: {index_name: [(N, [rate_by_layer]), ...]} parallel to
+        thread_counts.
+        """
+        rows = []
+        for index_name, series in disjoint_results.items():
+            if not series:
+                continue
+            for thread_count, (n, rates) in zip(thread_counts, series):
+                for layer, rate in enumerate(rates):
+                    rows.append(
+                        (
+                            run_id,
+                            index_name,
+                            int(thread_count),
+                            int(layer),
+                            int(n),
+                            float(rate),
+                        )
+                    )
+        if rows:
+            self.conn.executemany(
+                """
+                INSERT INTO disjoint_points (
+                    run_id, index_name, thread_count, layer, num_vectors, disjoint_rate
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 rows,
             )

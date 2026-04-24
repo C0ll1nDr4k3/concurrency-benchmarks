@@ -1,12 +1,25 @@
 # --- Runtime Configuration ---
 # These are set once at startup and overridden per-dataset by the runner.
 
+import os
+import warnings
+
 DIM = 128
 NUM_VECTORS = 10000
 NUM_QUERIES = 1000
 K = 10  # per recall_vs_qps
 
-THREAD_COUNTS = [2, 4, 8, 12, 16, 20, 24]
+_physical_cores = os.cpu_count() or 1
+_raw_thread_counts = [2, 4, 8, 12, 16, 20, 24]
+_capped = [t for t in _raw_thread_counts if t <= _physical_cores]
+if len(_capped) < len(_raw_thread_counts):
+    _dropped = [t for t in _raw_thread_counts if t > _physical_cores]
+    warnings.warn(
+        f"THREAD_COUNTS capped at {_physical_cores} physical core(s); "
+        f"dropped {_dropped} to avoid context-switching noise.",
+        stacklevel=1,
+    )
+THREAD_COUNTS = _capped or [_physical_cores]
 
 
 def make_quantized_cls(inner_cls, sq):

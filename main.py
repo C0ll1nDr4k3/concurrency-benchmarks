@@ -44,6 +44,7 @@ from nilvec.params import hnsw, ivf
 from nilvec.store import BenchmarkResultsStore
 from plotting.benchmark_plots import (
     plot_conflict_rate,
+    plot_disjoint_rate,
     plot_recall_vs_qps,
     plot_throughput,
 )
@@ -121,9 +122,10 @@ def _run_single_dataset(args, dataset_path):
     }
 
     ip = ivf(cfg.NUM_VECTORS)
-    # Single fixed-M config for throughput benchmark (explicitly selecting the
-    # one returned list element).
-    hp = hnsw(M=16)[0]
+    # Use a single high-recall HNSW/Hybrid construction setting across both
+    # recall and throughput to avoid parameter-policy drift.
+    high_recall_m = 64
+    hp = hnsw(M=high_recall_m)[0]
 
     # --- recall_vs_qps ---
     if not args.skip_recall:
@@ -141,15 +143,14 @@ def _run_single_dataset(args, dataset_path):
             (nilvec.HybridPessimistic, "Hybrid Pess"),
             (make_quantized_cls(nilvec.HNSWVanillaSQ8, sq), "HNSW Vanilla SQ8"),
         ]
-        # hnsw() returns one IndexParams per M value; expand into separate
-        # benchmark entries so each M is built once and ef_search is swept.
-        hnsw_param_list = hnsw()
-        ann_indexes = [
+        # Keep recall and throughput on one shared high-recall construction.
+        hnsw_param_list = [hp]
+        indexes = [
             (cls, f"{name} M={p.construction[0]}", p)
             for cls, name in hnsw_classes
             for p in hnsw_param_list
         ]
-        ann_indexes += [
+        indexes += [
             (nilvec.IVFFlatVanilla, "IVFFlat Vanilla", ip),
             (
                 make_quantized_cls(nilvec.IVFFlatVanillaSQ8, sq),
@@ -158,18 +159,18 @@ def _run_single_dataset(args, dataset_path):
             ),
         ]
         if faiss is not None:
-            ann_indexes += [
+            indexes += [
                 (FaissHNSW, f"FAISS HNSW M={p.construction[0]}", p)
                 for p in hnsw_param_list
             ]
-            ann_indexes.append((FaissIVF, "FAISS IVF", ip))
+            indexes.append((FaissIVF, "FAISS IVF", ip))
         if hnswlib is not None:
-            ann_indexes += [
+            indexes += [
                 (HnswLibIndex, f"HnswLib M={p.construction[0]}", p)
                 for p in hnsw_param_list
             ]
 
-        for index_cls, index_name, idx_params in ann_indexes:
+        for index_cls, index_name, idx_params in indexes:
             res = benchmark_recall_vs_qps(
                 index_cls,
                 index_name,
@@ -237,6 +238,7 @@ def _run_single_dataset(args, dataset_path):
         conflict_results = {}
         build_time_results = {}
         latency_results = {}
+        disjoint_results = {}
 
         externals = []
         if faiss:
@@ -265,7 +267,7 @@ def _run_single_dataset(args, dataset_path):
             if args.internal_only:
                 continue
             try:
-                res, conflicts, build, lats = benchmark_throughput_vs_threads(
+                res, conflicts, build, lats, disjoint = benchmark_throughput_vs_threads(
                     cls,
                     name,
                     data,
@@ -281,6 +283,7 @@ def _run_single_dataset(args, dataset_path):
                 conflict_results[name] = conflicts
                 build_time_results[name] = build
                 latency_results[name] = lats
+                disjoint_results[name] = disjoint
             except Exception as e:
                 print(f"Skipping {name}: {e}")
 
@@ -288,7 +291,7 @@ def _run_single_dataset(args, dataset_path):
             if args.external_only:
                 continue
             try:
-                res, conflicts, build, lats = benchmark_throughput_vs_threads(
+                res, conflicts, build, lats, disjoint = benchmark_throughput_vs_threads(
                     cls,
                     name,
                     data,
@@ -304,6 +307,7 @@ def _run_single_dataset(args, dataset_path):
                 conflict_results[name] = conflicts
                 build_time_results[name] = build
                 latency_results[name] = lats
+                disjoint_results[name] = disjoint
             except Exception as e:
                 print(f"Skipping {name}: {e}")
 
@@ -311,6 +315,7 @@ def _run_single_dataset(args, dataset_path):
         results_cache["conflicts"] = conflict_results
         results_cache["build_times"] = build_time_results
         results_cache["latency_results"] = latency_results
+        results_cache["disjoint"] = disjoint_results
         results_cache["external_names"] = [e[1] for e in externals]
 
         if args.cross_pollinate and results_store and run_id:
@@ -350,6 +355,13 @@ def _run_single_dataset(args, dataset_path):
             output_path=conflict_path,
         )
 
+        disjoint_path = os.path.join(plot_dir, "disjoint_rate.svg")
+        plot_disjoint_rate(
+            results_cache.get("disjoint", {}),
+            cfg.THREAD_COUNTS,
+            output_path=disjoint_path,
+        )
+
     if results_store and run_id:
         if results_cache["throughput"]:
             results_store.save_throughput(
@@ -360,6 +372,12 @@ def _run_single_dataset(args, dataset_path):
                 cfg.THREAD_COUNTS,
                 latency_results=results_cache.get("latency_results"),
             )
+            if results_cache.get("disjoint"):
+                results_store.save_disjoint(
+                    run_id,
+                    results_cache["disjoint"],
+                    cfg.THREAD_COUNTS,
+                )
         if results_cache["recall_vs_qps"]["runs"]:
             results_store.save_recall_runs(
                 run_id,

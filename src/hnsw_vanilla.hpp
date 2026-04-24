@@ -175,6 +175,50 @@ class HNSWVanilla {
    */
   int max_level() const { return max_level_; }
 
+  /**
+   * @brief Per-layer disjoint rate: fraction of nodes present at layer l
+   *        that are unreachable from the entry point via a BFS restricted
+   *        to layer-l edges. rates[l] in [0, 1], indexed by layer.
+   *
+   * Not thread-safe; call after all concurrent mutation has quiesced.
+   */
+  std::vector<double> disjoint_rates() const {
+    if (entry_point_ == INVALID_NODE || max_level_ < 0)
+      return {};
+    size_t N = vectors_.size();
+    std::vector<double> rates(max_level_ + 1, 0.0);
+    std::vector<bool> visited(N, false);
+    std::vector<NodeId> queue;
+    for (int layer = 0; layer <= max_level_; ++layer) {
+      size_t total = 0;
+      for (size_t i = 0; i < N; ++i) {
+        if (static_cast<int>(neighbors_[i].size()) > layer)
+          ++total;
+      }
+      if (total == 0)
+        continue;
+      std::fill(visited.begin(), visited.end(), false);
+      queue.clear();
+      if (static_cast<int>(neighbors_[entry_point_].size()) > layer) {
+        visited[entry_point_] = true;
+        queue.push_back(entry_point_);
+      }
+      size_t head = 0;
+      while (head < queue.size()) {
+        NodeId u = queue[head++];
+        for (NodeId v : neighbors_[u][layer]) {
+          if (v < N && !visited[v]) {
+            visited[v] = true;
+            queue.push_back(v);
+          }
+        }
+      }
+      rates[layer] = static_cast<double>(total - queue.size()) /
+                     static_cast<double>(total);
+    }
+    return rates;
+  }
+
  private:
   /**
    * @brief Greedy search within a single layer (upper layers).

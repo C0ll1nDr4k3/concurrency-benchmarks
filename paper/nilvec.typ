@@ -131,7 +131,7 @@ Each index family (IVFFlat and HNSW) is implemented with four concurrency strate
 
 The four concurrency strategies above apply uniformly within each index family, but the structural asymmetry between HNSW and IVFFlat suggests a hybrid that inherits the strengths of both. HNSW's upper layers naturally partition the vector space: each node promoted to layer 2 or above implicitly defines a Voronoi cell over the lower-layer nodes nearest to it. These upper-layer nodes are the hub nodes of the graph -- a small, well-connected subset responsible for most long-range traversal @munyampirwa2025hubs -- making them effective spatial landmarks for partitioning. By making this partition explicit, we obtain IVF-style write isolation at the base layer while retaining HNSW's sublinear graph walk for search.
 
-The choice of layer 2 rather than layer 1 as the partition threshold follows from the geometry of HNSW's level distribution. Each HNSW layer contains roughly $1 slash M$ of the nodes from the layer below. For $N$ indexed vectors, layer 1 contains approximately $N slash M$ nodes and layer 2 contains approximately $N slash M^2$ nodes. Using layer-1 nodes as partition centers produces $N slash M$ partitions with only $~M$ vectors per cell on average. At this granularity the partitions are too sparse for productive IVF-style probing: reaching acceptable recall requires probing many nearly-empty cells, and the per-cell overhead dominates. Layer 2, by contrast, yields $N slash M^2$ partitions with $~M^2$ vectors per cell, which for typical values of $M$ falls near the standard IVF heuristic of $sqrt(N)$ clusters. For example, with $M = 16$ and $N = 1 thin 000 thin 000$, layer 1 contains roughly 31,000 nodes ($~$32 vectors per cell) while layer 2 contains roughly 1,000 nodes ($~$1,000 vectors per cell).
+The choice of layer 2 rather than layer 1 as the partition threshold follows from the geometry of HNSW's level distribution. Each HNSW layer contains roughly $1 slash M$ of the nodes from the layer below. For $N$ indexed vectors, layer 1 contains approximately $N slash M$ nodes and layer 2 contains approximately $N slash M^2$ nodes. Using layer-1 nodes as partition centers produces $N slash M$ partitions with only $~M$ vectors per cell on average. At this granularity the partitions are too sparse for productive IVF-style probing: reaching acceptable recall requires probing many nearly-empty cells, and the per-cell overhead dominates. Layer 2, by contrast, yields $N slash M^2$ partitions with $~M^2$ vectors per cell, which for typical values of $M$ is within the same order of magnitude as the standard IVF heuristic of $sqrt(N)$ clusters (exact alignment occurs when $N approx M^4$). For example, with $M = 16$ and $N = 1,000,000$, layer 1 contains roughly 62,500 nodes ($~16$ vectors per cell) while layer 2 contains roughly 3,900 nodes ($~256$ vectors per cell), compared to $sqrt(N) = 1,000$ under the IVF heuristic.
 
 Our `HybridPessimistic` implementation maintains a full HNSW graph across all layers, including layer 0. Each layer-2+ node additionally registers a partition upon insertion, and each lower-layer node is assigned to the partition whose center was nearest during the inserting thread's descent. *The partition assignment determines which lock protects a node's layer-0 edge list; it does not restrict the search path.* Layer-0 edges cross partition boundaries freely, connecting each node to its $M$ nearest neighbors regardless of partition membership.
 
@@ -159,6 +159,33 @@ All indexes return $k = 10$ nearest neighbors per query. HNSW variants use $M = 
 
 All experiments were conducted on a Lenovo Legion Pro 7i 16IAX10H with an Intel Core Ultra 9 275HX CPU (24 total cores: 8P+16E) and 32 GiB RAM. Our evaluation is restricted to CPU-based architectures to maintain a direct comparison between our custom concurrency control strategies. Although GPU-acceleration is a common optimization for batch ANN search, implementing our proposed fine-grained locking and optimistic retry mechanisms within GPU kernels involves significant architectural complexity that we reserve for future work.
 
+== Graph Connectivity
+
+The preceding section compared concurrency strategies on throughput; we now analyze a correctness axis particular to graph-based indexes: disjoint nodes. An HNSW graph is a navigable small-world structure whose search correctness depends on every indexed vector being reachable from the entry point via a bounded-length walk @malkov2020hnsw. Under concurrent mutation, this invariant can be violated even when no individual operation appears incorrect in isolation.
+
+=== Failure Mode
+
+Disjoint nodes arise during the neighbor-list rewrite step of HNSW insertion. When a new node $v$ is inserted, it selects $M$ neighbors via the Malkov heuristic, and each of those neighbors in turn has its own neighbor list pruned to bound out-degree at $M$ @malkov2020hnsw. Pruning replaces the neighbor's list wholesale rather than appending to it. Under concurrent inserts, two threads $A$ and $B$ may both read the same neighbor list $N(u) = {a, b, c}$ for some node $u$, each independently compute a replacement (say $A$ writes ${a, b, d}$ and $B$ writes ${a, b, e}$), and the later commit silently clobbers the earlier. If the clobbered edge was the sole remaining inbound edge to a node $w$ at that layer, then $w$ becomes unreachable from the entry point. The node is still present in the index's vector store and may be reachable via a different layer, but at the affected layer it is structurally disjoint.
+
+=== Expected Rate by Strategy
+
+Let $T$ denote the number of concurrent writer threads, $N$ the number of indexed vectors at the relevant layer, and $rho$ the write fraction. We characterize the expected per-operation disjoint rate $delta$ for each strategy.
+
++ *Vanilla, Pessimistic, and Hybrid*. Both preserve the sequential HNSW invariant. Vanilla by construction, pessimistic by serializing the prune-and-rewrite critical section. So, $delta$ reduces to the baseline established in the original HNSW analysis @malkov2020hnsw. Hybrid varaints inherit the rate of their parent (pessimistic or optimistic), so the same generalizations apply.
+
++ *Optimistic*.
+  Two probabilities govern the rate. Let $p_"race"$ be the probability that two threads concurrently mutate the same neighbor list within a commit window, and $p_"crit"$ the conditional probability that a clobbered edge was the sole remaining path to some node. By a birthday argument over neighbor lists touched per insert,
+  $ p_"race" approx binom(T, 2) dot c^2 / N = Theta(T^2 / N), $
+  where $c$ is the average number of neighbor lists touched per insert (bounded by $M$). The $c^2$ factor follows from a union bound: each of two threads has a footprint of $c$ lists out of $N$, so the probability that a second thread hits any list in the first thread's footprint is approximately $c dot (c / N)$. The expected disjoint rate per operation is then
+  $ delta_"opt" approx rho dot p_"race" dot p_"crit" = Theta(rho dot T^2 / N). $
+  The quadratic dependence on thread count is the central formal difference between optimistic and pessimistic strategies on this metric, and it predicts a knee beyond which additional threads trade structural integrity for throughput at an accelerating rate.
+
+=== Measurement Protocol
+
+We quantify disjointness directly rather than inferring from recall, since recall conflates structural breakage with search-tuning suboptimality. After each benchmark run, we perform a breadth-first search from the entry point at each HNSW layer and count the nodes not visited. We report the per-layer disjoint rate, $delta_ell = (|"unreached"_ell|) / (|"nodes at layer"_ell|)$, alongside the overall rate. Layer 0 is of primary interest, since unreachable layer-0 nodes directly reduce achievable recall; higher-layer disjointness is a secondary indicator of upper-level graph damage.
+
+This measurement yields a principled bound on usable concurrency: for any acceptable threshold $delta^*$, the largest $T$ satisfying $delta(T) lt.eq delta^*$ is the honest upper limit on concurrency for a given graph size under a given strategy.
+
 = Results
 
 == Throughput
@@ -179,21 +206,28 @@ Incidentally, the lower a dataset's throughput, the higher is cluster density.
       image("plots/fashion-mnist-784-euclidean_full/throughput_scaling.svg", width: 100%),
       caption: [Fashion-MNIST-784],
     ),
+
     figure(
       image("plots/fashion-mnist-784-euclidean_full/throughput_scaling.svg", width: 100%),
       caption: [Fashion-MNIST-784],
-    )
+    ),
   ),
   caption: [
     Throughput scaling with increasing numbers of threads for each index type, for tested full-run datasets.
   ],
 )
 
+== Disjoint Rate
+
+We report the measured per-operation disjoint rate as a function of thread count for each HNSW concurrency strategy, sweeping the write fraction $rho$ across the same range as the throughput sweep. The model in the previous section predicts pessimistic and vanilla variants to remain flat at the sequential baseline, and optimistic variants to exhibit growth consistent with the $Theta(rho dot T^2 / N)$ bound. We report layer 0 and overall rates separately; the gap between them quantifies how much of the concurrency damage is masked by HNSW's multi-layer routing.
+
+// TODO: plots/*/disjoint_rate.svg — generated from the post-run BFS pass
+
 = Discussion
 
 - *_Why hasn't this been done before?_* The predominant paradigm has been offline construction followed by read-only serving, so reader-writer concurrency at the index level simply never arose. Systems that do accept writes typically side-step the problem architecturally: mutable segments are flushed to read-only storage on a rolling basis, and searches hit only sealed data @wang2021milvus. Deletions are handled similarly via tombstoning followed by periodic rebuilds rather than in-place graph repair @pinecone2023hnsw. Streaming workloads driven by retrieval-augmented generation @lewis2020rag have only recently made in-place concurrent update a practical consideration.
 
-- *_Why does HNSW degrade more under concurrent writes than IVF?_* The answer lies in a structural asymmetry between the two index types. HNSW is a navigable small-world graph: its search correctness depends on the graph remaining well-connected across layers @malkov2020hnsw. During insertion, a new node is wired into the graph by selecting neighbors via a heuristic and then back-linking those neighbors to the new node @malkov2020hnsw. Under concurrent writes, these two steps are not atomic. A racing writer can observe a partially-linked node, traverse a stale edge, or have its own neighbor list pruned before its back-links are established, any of which can leave the graph with weakly connected or entirely isolated nodes. Heuristics like deferred or batched pruning reduce the frequency of such breaks but cannot eliminate them: they trade recall loss for throughput, rather than recovering the full structural guarantee. The damage is disproportionate when hub nodes are affected, since a small hub subset carries most long-range traversal @munyampirwa2025hubs. IVF does not share this vulnerability. At the coarse quantizer level, cluster assignment is a read-only operation; inserting a vector into a cluster appends to a list and requires only a per-cluster lock @douze2024faiss. Concurrent writers targeting different clusters are entirely independent, and even writers within the same cluster contend only on a flat append structure with no graph invariant to preserve. The degradation seen in HNSW throughput and recall under high write concurrency is therefore not merely an implementation artifact; it reflects a fundamental tension between the graph connectivity invariant that makes HNSW fast and the atomicity that concurrent mutation requires.
+- *_Why does HNSW degrade more under concurrent writes than IVF?_* The answer lies in a structural asymmetry between the two index types. HNSW is a navigable small-world graph: its search correctness depends on the graph remaining well-connected across layers @malkov2020hnsw. During insertion, a new node is wired into the graph by selecting neighbors via a heuristic and then back-linking those neighbors to the new node @malkov2020hnsw. Under concurrent writes, these two steps are not atomic. A racing writer can observe a partially-linked node, traverse a stale edge, or have its own neighbor list pruned before its back-links are established, any of which can leave the graph with weakly connected or entirely isolated nodes. Heuristics like deferred or batched pruning reduce the frequency of such breaks but cannot eliminate them: they trade recall loss for throughput, rather than recovering the full structural guarantee. The graph connectivity analysis above quantifies this tradeoff directly, showing that the expected disjoint rate under optimistic concurrency grows as $Theta(rho T^2 / N)$ while pessimistic variants remain at the sequential baseline. The damage is disproportionate when hub nodes are affected, since a small hub subset carries most long-range traversal @munyampirwa2025hubs. IVF does not share this vulnerability. At the coarse quantizer level, cluster assignment is a read-only operation; inserting a vector into a cluster appends to a list and requires only a per-cluster lock @douze2024faiss. Concurrent writers targeting different clusters are entirely independent, and even writers within the same cluster contend only on a flat append structure with no graph invariant to preserve. The degradation seen in HNSW throughput and recall under high write concurrency is therefore not merely an implementation artifact; it reflects a fundamental tension between the graph connectivity invariant that makes HNSW fast and the atomicity that concurrent mutation requires.
 
 = Conclusion
 

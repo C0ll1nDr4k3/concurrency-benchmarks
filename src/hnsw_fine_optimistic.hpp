@@ -214,6 +214,47 @@ class HNSWFineOptimistic {
    */
   void reset_conflict_stats() { conflict_stats_.reset(); }
 
+  /// Per-layer disjoint rate. Call after concurrent mutation has quiesced.
+  std::vector<double> disjoint_rates() const {
+    std::shared_lock lock(global_mutex_);
+    NodeId ep = entry_point_.load(std::memory_order_acquire);
+    int ml = max_level_.load(std::memory_order_acquire);
+    if (ep == INVALID_NODE || ml < 0)
+      return {};
+    size_t N = nodes_.size();
+    std::vector<double> rates(ml + 1, 0.0);
+    std::vector<bool> visited(N, false);
+    std::vector<NodeId> queue;
+    for (int layer = 0; layer <= ml; ++layer) {
+      size_t total = 0;
+      for (size_t i = 0; i < N; ++i) {
+        if (static_cast<int>(nodes_[i]->neighbors.size()) > layer)
+          ++total;
+      }
+      if (total == 0)
+        continue;
+      std::fill(visited.begin(), visited.end(), false);
+      queue.clear();
+      if (static_cast<int>(nodes_[ep]->neighbors.size()) > layer) {
+        visited[ep] = true;
+        queue.push_back(ep);
+      }
+      size_t head = 0;
+      while (head < queue.size()) {
+        NodeId u = queue[head++];
+        for (NodeId v : nodes_[u]->neighbors[layer]) {
+          if (v < N && !visited[v]) {
+            visited[v] = true;
+            queue.push_back(v);
+          }
+        }
+      }
+      rates[layer] = static_cast<double>(total - queue.size()) /
+                     static_cast<double>(total);
+    }
+    return rates;
+  }
+
  private:
   /**
    * @brief Node structure with version for optimistic concurrency.
