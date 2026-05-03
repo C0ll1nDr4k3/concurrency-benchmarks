@@ -208,10 +208,43 @@ def benchmark_throughput_vs_threads(
     else:
         index = index_cls(config.DIM, *index_args)
 
+    # Vanilla indexes are intentionally non-thread-safe (the point is to show
+    # data races during the measured phase).  Preload must be correct, so for
+    # those we stay single-threaded; everything else uses a thread pool since
+    # nilvec's concurrent indexes release the GIL in C++.
+    preload_threads = 1 if "Vanilla" in index_name else max(config.THREAD_COUNTS)
+
     preload_start = time.time()
     if preload_n > 0:
-        for vec in tqdm(preload_data, desc=f"  Preload {index_name}", unit="vec"):
-            index.insert(vec)
+        with tqdm(
+            total=preload_n,
+            desc=f"  Preload {index_name} [T={preload_threads}]",
+            unit="vec",
+            dynamic_ncols=True,
+        ) as pbar:
+            if preload_threads == 1:
+                for vec in preload_data:
+                    index.insert(vec)
+                    pbar.update(1)
+            else:
+
+                def _preload_worker(vecs):
+                    for v in vecs:
+                        index.insert(v)
+                        pbar.update(1)
+
+                workers = []
+                chunk = preload_n // preload_threads
+                for i in range(preload_threads):
+                    lo = i * chunk
+                    hi = (i + 1) * chunk if i < preload_threads - 1 else preload_n
+                    t = threading.Thread(
+                        target=_preload_worker, args=(preload_data[lo:hi],)
+                    )
+                    workers.append(t)
+                    t.start()
+                for t in workers:
+                    t.join()
     preload_time = time.time() - preload_start
 
     for num_threads in config.THREAD_COUNTS:
